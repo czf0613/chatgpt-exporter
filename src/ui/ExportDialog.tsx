@@ -378,7 +378,7 @@ interface DialogContentProps {
 
 const DialogContent: FC<DialogContentProps> = ({ format }) => {
     const { t } = useTranslation()
-    const { enableMeta, exportMetaList, exportAllLimit } = useSettingContext()
+    const { enableMeta, exportMetaList, exportAllLimit, enableAttachments } = useSettingContext()
     const metaList = useMemo(() => enableMeta ? exportMetaList : [], [enableMeta, exportMetaList])
 
     const exportAllOptions = useMemo(() => [
@@ -453,11 +453,13 @@ const DialogContent: FC<DialogContentProps> = ({ format }) => {
 
     const startApiBatch = useCallback((chunk: ApiConversationItem[]) => {
         requestQueue.clear()
+        // Only the Markdown and HTML exporters embed attachments; the JSON exporters keep the raw API response
+        const fetchAttachments = enableAttachments && (exportType === 'Markdown' || exportType === 'HTML')
         chunk.forEach(({ id, title }) => {
-            requestQueue.add({ name: title, request: () => fetchConversation(id, exportType !== 'JSON') })
+            requestQueue.add({ name: title, request: () => fetchConversation(id, exportType !== 'JSON', fetchAttachments) })
         })
         requestQueue.start()
-    }, [requestQueue, exportType])
+    }, [requestQueue, exportType, enableAttachments])
 
     useEffect(() => {
         const off = requestQueue.on('progress', (prog) => {
