@@ -3,7 +3,7 @@
 // @name:zh-CN         ChatGPT Exporter
 // @name:zh-TW         ChatGPT Exporter
 // @namespace          pionxzh
-// @version            2.36.3
+// @version            2.37.0
 // @author             pionxzh
 // @description        Export ChatGPT conversations with one click — backup & share effortlessly!
 // @description:zh-CN  一键导出 ChatGPT 对话，轻松备份与分享
@@ -839,6 +839,50 @@
 		used.add(candidate.toLowerCase());
 		return candidate;
 	}
+	var ATTACHMENT_PLACEHOLDER_REGEX = /attachment:\/\/[^\s)"'<>\]]+/g;
+	function attachmentPlaceholder(name) {
+		return `attachment://${encodeURIComponent(name)}`;
+	}
+	function attachmentNameFromPlaceholder(placeholder) {
+		return safeDecode(placeholder.replace(/^attachment:\/\//, ""));
+	}
+	var MIME_EXTENSIONS = {
+		"image/png": "png",
+		"image/jpeg": "jpg",
+		"image/gif": "gif",
+		"image/webp": "webp",
+		"image/svg+xml": "svg",
+		"image/bmp": "bmp",
+		"image/avif": "avif"
+	};
+	function extensionFromMimeType(mimeType, fallback = "bin") {
+		const type = mimeType.split(";")[0].trim().toLowerCase();
+		return MIME_EXTENSIONS[type] ?? type.split("/")[1]?.replace(/[^a-z0-9]/g, "") ?? fallback;
+	}
+	function dataUrlToBlob(dataUrl) {
+		const match = /^data:([^;,]*);base64,(.*)$/s.exec(dataUrl);
+		if (!match) return null;
+		try {
+			const binary = atob(match[2]);
+			const bytes = new Uint8Array(binary.length);
+			for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+			return new Blob([bytes], { type: match[1] || "application/octet-stream" });
+		} catch {
+			return null;
+		}
+	}
+	async function mapWithConcurrency(items, limit, fn) {
+		const results = Array.from({ length: items.length });
+		let next = 0;
+		const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+			while (next < items.length) {
+				const index = next++;
+				results[index] = await fn(items[index], index);
+			}
+		});
+		await Promise.all(workers);
+		return results;
+	}
 	var generateKey = (args) => JSON.stringify(args);
 	function memorize(fn) {
 		const cache = new Map();
@@ -1053,6 +1097,7 @@
 			...await fetchApi(conversationApi(chatId))
 		};
 	}
+	var ATTACHMENT_CONCURRENCY = 4;
 	var conversationAttachmentsMap = new WeakMap();
 	function getConversationAttachments(conversation) {
 		return conversationAttachmentsMap.get(conversation);
@@ -1188,18 +1233,33 @@
 		if (!response.ok) throw new Error(response.statusText || `HTTP ${response.status}`);
 		return response.blob();
 	}
-	async function fetchConversationAttachments(conversation, context = { conversationId: conversation.id }) {
+	async function fetchConversationAttachments(conversation, context = { conversationId: conversation.id }, options = {}) {
 		const result = {
 			items: [],
 			failed: []
 		};
 		const usedNames = new Set();
-		for (const ref of collectAttachmentRefs(conversation, context)) {
-			const { key, messageId, source, sandboxPath, linked } = ref;
+		const downloads = await mapWithConcurrency(collectAttachmentRefs(conversation, context), ATTACHMENT_CONCURRENCY, async (ref) => {
 			try {
 				const details = await resolveAttachment(context, ref);
-				const blob = await downloadAttachmentBlob(details);
-				const name = uniqueFileName(toSafeFileName(ref.name || details.file_name || ""), usedNames);
+				return {
+					ref,
+					blob: await downloadAttachmentBlob(details),
+					fileName: details.file_name
+				};
+			} catch (error) {
+				const reason = error instanceof Error ? error.message : String(error);
+				console.warn(`[Exporter] Failed to download attachment "${ref.name}":`, reason);
+				return {
+					ref,
+					reason
+				};
+			}
+		});
+		for (const download of downloads) {
+			const { key, messageId, source, sandboxPath, linked } = download.ref;
+			if ("blob" in download) {
+				const name = uniqueFileName(toSafeFileName(download.ref.name || download.fileName || ""), usedNames);
 				result.items.push({
 					key,
 					name,
@@ -1207,32 +1267,72 @@
 					source,
 					sandboxPath,
 					linked,
-					blob
+					blob: download.blob
 				});
-			} catch (error) {
-				const reason = error instanceof Error ? error.message : String(error);
-				console.warn(`[Exporter] Failed to download attachment "${ref.name}":`, reason);
-				result.failed.push({
-					key,
-					name: ref.name,
-					messageId,
-					source,
-					sandboxPath,
-					linked,
-					reason
+			} else result.failed.push({
+				key,
+				name: download.ref.name,
+				messageId,
+				source,
+				sandboxPath,
+				linked,
+				reason: download.reason
+			});
+		}
+		if (options.images) extractImageAttachments(conversation, result, usedNames);
+		return result;
+	}
+	function extractImageAttachments(conversation, result, usedNames) {
+		const slots = [];
+		for (const node of Object.values(conversation.mapping)) {
+			const message = node.message;
+			if (!message || shouldSkipMessageInExport(message)) continue;
+			if (message.content.content_type === "multimodal_text") {
+				for (const part of message.content.parts ?? []) if (typeof part === "object" && part !== null && part.content_type === "image_asset_pointer" && part.asset_pointer.startsWith("data:")) slots.push({
+					messageId: message.id,
+					holder: part
+				});
+			}
+			if (message.content.content_type === "execution_output") {
+				for (const msg of message.metadata?.aggregate_result?.messages ?? []) if (msg.message_type === "image" && msg.image_url.startsWith("data:")) slots.push({
+					messageId: message.id,
+					holder: msg
 				});
 			}
 		}
-		return result;
+		const namesByDataUrl = new Map();
+		let count = 0;
+		for (const { messageId, holder } of slots) {
+			const dataUrl = "asset_pointer" in holder ? holder.asset_pointer : holder.image_url;
+			let name = namesByDataUrl.get(dataUrl);
+			if (!name) {
+				const blob = dataUrlToBlob(dataUrl);
+				if (!blob) continue;
+				count++;
+				name = uniqueFileName(`image-${count}.${extensionFromMimeType(blob.type, "png")}`, usedNames);
+				namesByDataUrl.set(dataUrl, name);
+				result.items.push({
+					key: `image:${count}`,
+					name,
+					messageId,
+					source: "image",
+					linked: true,
+					blob
+				});
+			}
+			const placeholder = attachmentPlaceholder(name);
+			if ("asset_pointer" in holder) holder.asset_pointer = placeholder;
+			else holder.image_url = placeholder;
+		}
 	}
-	async function loadConversationAttachments(conversation) {
+	async function loadConversationAttachments(conversation, options = {}) {
 		const attachments = await fetchConversationAttachments(conversation, isSharePage() ? {
 			conversationId: conversation.id,
 			shareId: conversation.id
 		} : {
 			conversationId: conversation.id,
 			projectId: conversation.gizmo_id?.startsWith("g-p-") ? conversation.gizmo_id : void 0
-		});
+		}, options);
 		conversationAttachmentsMap.set(conversation, attachments);
 		return attachments;
 	}
@@ -1433,6 +1533,7 @@
 		if (message.author.role === "assistant" && message.content.content_type === "text" && !message.content.parts.join("").trim()) return true;
 		if (message.author.role === "tool") {
 			if (message.author.name === "file_search") return true;
+			if (message.metadata?.command === "context_stuff") return true;
 			const hasExecutionImages = message.content.content_type === "execution_output" && !!message.metadata?.aggregate_result?.messages?.some((msg) => msg.message_type === "image");
 			const hasMultimodalImage = message.content.content_type === "multimodal_text" && message.content.parts.some((part) => {
 				return typeof part !== "string" && part.content_type === "image_asset_pointer";
@@ -2906,9 +3007,13 @@
 	}
 	function rewriteAttachmentLinks(input, attachments, dir) {
 		const hrefs = new Map();
-		for (const item of attachments?.items ?? []) if (item.sandboxPath) hrefs.set(item.sandboxPath, attachmentHref(dir, item.name));
-		if (hrefs.size === 0) return input;
-		return input.replace(SANDBOX_LINK_REGEX, (link) => hrefs.get(sandboxPathFromLink(link)) ?? link);
+		const placeholders = new Map();
+		for (const item of attachments?.items ?? []) {
+			if (item.sandboxPath) hrefs.set(item.sandboxPath, attachmentHref(dir, item.name));
+			if (item.source === "image") placeholders.set(item.name, attachmentHref(dir, item.name));
+		}
+		if (hrefs.size === 0 && placeholders.size === 0) return input;
+		return input.replace(SANDBOX_LINK_REGEX, (link) => hrefs.get(sandboxPathFromLink(link)) ?? link).replace(ATTACHMENT_PLACEHOLDER_REGEX, (placeholder) => placeholders.get(attachmentNameFromPlaceholder(placeholder)) ?? placeholder);
 	}
 	function getMessageAttachmentEntries(message, attachments, dir) {
 		const entries = [];
@@ -11220,7 +11325,7 @@
 				});
 			} else postSteps = [(input) => `<p class="no-katex">${escapeHtml(input)}</p>`];
 			const postProcess = (input) => postSteps.reduce((acc, fn) => fn(acc), input);
-			const content = transformContent$2(message.content, message.metadata, postProcess);
+			const content = rewriteAttachmentLinks(transformContent$2(message.content, message.metadata, postProcess), attachments, attachmentDir);
 			const attachmentEntries = getMessageAttachmentEntries(message, attachments, attachmentDir);
 			const attachmentsHtml = attachmentEntries.length ? `<ul class="attachments">${attachmentEntries.map((entry) => `<li>📎 ${formatAttachmentEntryHtml(entry)}</li>`).join("")}</ul>` : "";
 			const timestamp = message?.create_time ?? "";
@@ -12284,7 +12389,7 @@
 		}
 		const chatId = await getCurrentChatId();
 		const rawConversation = await withImageAssets(await fetchConversation(chatId));
-		if (ScriptStorage.get("exporter:enable_attachments") ?? true) await loadConversationAttachments(rawConversation);
+		if (ScriptStorage.get("exporter:enable_attachments") ?? true) await loadConversationAttachments(rawConversation, { images: true });
 		const conversation = processConversation(rawConversation, { enableThinking: ScriptStorage.get("exporter:enable_thinking") ?? false });
 		const markdown = conversationToMarkdown(conversation, metaList, SINGLE_EXPORT_ATTACHMENT_DIR);
 		await downloadFileWithAttachments(getFileNameWithFormat(fileNameFormat, "md", {
@@ -12366,7 +12471,7 @@
 				return restore(toMarkdown(fromMarkdown(text), text));
 			});
 			const postProcess = (input) => postSteps.reduce((acc, fn) => fn(acc), input);
-			const content = transformContent$1(message.content, message.metadata, postProcess);
+			const content = rewriteAttachmentLinks(transformContent$1(message.content, message.metadata, postProcess), attachments, attachmentDir);
 			const attachmentsBlock = formatAttachmentsMarkdown(message, attachments, attachmentDir);
 			return `#### ${author}:\n${timestampHtml}${thinkingBlock}${content}${attachmentsBlock}`;
 		}).filter(Boolean).join("\n\n")}`;
@@ -13604,7 +13709,7 @@
 						}
 						if (exportType === "JSON") return conversation;
 						const exportable = await withImageAssets(conversation);
-						if (fetchAttachments) await loadConversationAttachments(exportable);
+						if (fetchAttachments) await loadConversationAttachments(exportable, { images: exportType === "Markdown" });
 						return exportable;
 					}
 				});

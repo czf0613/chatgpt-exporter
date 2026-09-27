@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.37.0](https://github.com/czf0613/chatgpt-exporter/compare/userscript-v2.36.3...userscript-v2.37.0-fork) (2026-09-27)
+
+Fork release on top of upstream 2.36.3.
+
+### Features
+
+* download the files ChatGPT generates (Code Interpreter output linked as `sandbox:/mnt/data/...` or recorded in the message metadata) and non-image uploads, and bundle them with the Markdown/HTML export in a zip; controlled by the new **Export Attachments** setting
+* resolve generated files the way ChatGPT does: persisted copy first, sandbox endpoint with retries as fallback, project header for project chats, share endpoint on share pages
+* save images as `attachments/image-N.png` in the Markdown export instead of embedding base64
+* download attachments four at a time
+
+### Bug Fixes
+
+* skip the parsed text and page images of uploaded files that ChatGPT stuffs into the context, which leaked into exports as `sediment://...#p_N.jpg` pointers
+
 ## [2.36.3](https://github.com/pionxzh/chatgpt-exporter/compare/userscript-v2.36.2...userscript-v2.36.3) (2026-09-26)
 
 
