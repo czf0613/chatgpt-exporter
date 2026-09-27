@@ -2,7 +2,7 @@
 
 <div align="center">
 
-## A userscript to export the chat history of [ChatGPT](https://chatgpt.com/), attachments included
+## 一键导出 [ChatGPT](https://chatgpt.com/) 聊天记录的用户脚本，附件也一并导出
 
 [![license][license-image]][license-url]
 [![release][release-image]][release-url]
@@ -15,17 +15,17 @@
 [upstream-image]: https://img.shields.io/badge/fork%20of-pionxzh%2Fchatgpt--exporter-lightgrey
 [upstream-url]: https://github.com/pionxzh/chatgpt-exporter
 
-English &nbsp;&nbsp;|&nbsp;&nbsp; [简体中文](./README_ZH-CN.md)
+[English](./README.md) &nbsp;&nbsp;|&nbsp;&nbsp; 简体中文
 
-This is a fork of [pionxzh/chatgpt-exporter](https://github.com/pionxzh/chatgpt-exporter) that keeps up with upstream and adds **[attachment export](#-attachments)**: the files ChatGPT generates and the files you upload are downloaded and bundled with the Markdown/HTML export, and images are saved as files in the Markdown export. It is not published on GreasyFork; install it from GitHub below.
+本项目是 [pionxzh/chatgpt-exporter](https://github.com/pionxzh/chatgpt-exporter) 的 fork，跟随上游更新，并增加了 **[附件导出](#-附件)**：ChatGPT 生成的文件和你上传的文件会随 Markdown/HTML 导出一起下载打包，Markdown 导出中的图片也会保存为文件。本 fork 未发布到 GreasyFork，请从下方的 GitHub 地址安装。
 
 ![image](https://github.com/pionxzh/chatgpt-exporter/assets/9910706/1c864670-7912-4484-b4be-bdf5dde51557)
 
-## Install
+## 安装
 
-### Prerequisites
+### 前置条件
 
-<align>Install <b>`Tampermonkey`</b></align>
+<align>安装 <b>`Tampermonkey`</b></align>
 
 [<img src="https://user-images.githubusercontent.com/3750161/214147732-c75e96a4-48a4-4b64-b407-c2402e899a75.PNG" height="60" alt="Chrome" valign="middle">][link-chrome] &nbsp;&nbsp; [<img src="https://user-images.githubusercontent.com/3750161/214148610-acdef778-753e-470e-8765-6cc97bca85ed.png" height="60" alt="Firefox" valign="middle">][link-firefox] &nbsp;&nbsp; [<img src="https://user-images.githubusercontent.com/3750161/233201810-d1026855-0482-44c8-b1ec-c7247134473e.png" height="60" alt="Chrome" valign="middle">][link-edge]
 
@@ -33,36 +33,36 @@ This is a fork of [pionxzh/chatgpt-exporter](https://github.com/pionxzh/chatgpt-
 [link-firefox]: https://addons.mozilla.org/firefox/addon/tampermonkey 'Firefox Add-ons'
 [link-edge]: https://microsoftedge.microsoft.com/addons/detail/tampermonkey/iikmkjmpaadaobahmlepeloendndfphd 'Edge Add-ons'
 
-### UserScript
+### 用户脚本
 
-[![Install][Install-image]][install-url]
+[![安装][Install-image]][install-url]
 
-[Install-image]: https://img.shields.io/badge/-Install%20from%20GitHub-blue
+[Install-image]: https://img.shields.io/badge/-%E4%BB%8E%20GitHub%20%E5%AE%89%E8%A3%85-blue
 [Install-url]: https://raw.githubusercontent.com/czf0613/chatgpt-exporter/master/dist/chatgpt.user.js
 
-Tampermonkey checks the same URL for updates, so every release pushed to `master` reaches you automatically. The built script is also attached to each [release](https://github.com/czf0613/chatgpt-exporter/releases). The original script without attachment export is on [GreasyFork](https://greasyfork.org/scripts/456055-chatgpt-exporter).
+Tampermonkey 会从同一地址检查更新，因此每次发布推送到 `master` 后都会自动更新到你的浏览器。构建好的脚本也附在每个 [release](https://github.com/czf0613/chatgpt-exporter/releases) 中。不含附件导出功能的原版脚本发布在 [GreasyFork](https://greasyfork.org/scripts/456055-chatgpt-exporter)。
 
-> Make sure that the [`Allow User Scripts` is enabled](https://www.tampermonkey.net/faq.php?q=Q209) in your browser settings for Tampermonkey.
+> 请确认已在浏览器中为 Tampermonkey [开启 `Allow User Scripts`（允许用户脚本）](https://www.tampermonkey.net/faq.php?q=Q209)。
 
 #
 
-[📚 Supported Formats](#-supported-formats) &nbsp;&nbsp;|&nbsp;&nbsp; [💡 Example](#-example) &nbsp;&nbsp;|&nbsp;&nbsp; [📎 Attachments](#-attachments) &nbsp;&nbsp;|&nbsp;&nbsp; [📤 Export Multiple Conversations](#-export-multiple-conversations) &nbsp;&nbsp;|&nbsp;&nbsp; [🤝 Contribution](#-contribution) &nbsp;&nbsp;|&nbsp;&nbsp; [⭐ Star History](#-star-history)
+[📚 支持的格式](#-支持的格式) &nbsp;&nbsp;|&nbsp;&nbsp; [💡 示例](#-示例) &nbsp;&nbsp;|&nbsp;&nbsp; [📎 附件](#-附件) &nbsp;&nbsp;|&nbsp;&nbsp; [📤 批量导出对话](#-批量导出对话) &nbsp;&nbsp;|&nbsp;&nbsp; [🤝 参与贡献](#-参与贡献) &nbsp;&nbsp;|&nbsp;&nbsp; [⭐ Star 历史](#-star-历史)
 
 </div>
 
 #
 
-## 📚 Supported Formats
+## 📚 支持的格式
 
-- [Text](#text)
+- [文本](#文本)
 - [HTML](#html)
 - [Markdown](#markdown)
-- [PNG](#screenshot)
+- [PNG](#截图)
 - [JSON](#json)
 
-## 💡 Example
+## 💡 示例
 
-### Text
+### 文本
 
 ```
 You:
@@ -108,7 +108,7 @@ I'm creating a ChatGPT Exporter. What do you think?
 It sounds like you're planning on creating a tool that uses the ChatGPT model to export text. ChatGPT is a large language model trained by OpenAI that is designed to generate human-like text responses based on a given input. It can be used for a variety of applications, such as chatbots, automated responses to customer inquiries, and more.
 ```
 
-### Screenshot
+### 截图
 
 <div align="center">
 <img width="480" src="https://user-images.githubusercontent.com/9910706/205663680-6ac97fac-39b0-495c-bee4-8ef37713a9ae.png" />
@@ -117,10 +117,10 @@ It sounds like you're planning on creating a tool that uses the ChatGPT model to
 
 ### JSON
 
-the raw content from API `https://chat.openai.com/backend-api/conversation/[id]`
+即接口 `https://chat.openai.com/backend-api/conversation/[id]` 返回的原始内容
 
 <details>
-<summary>Click to see</summary>
+<summary>点击展开</summary>
 
 ```json
 {
@@ -221,52 +221,52 @@ the raw content from API `https://chat.openai.com/backend-api/conversation/[id]`
 ```
 </details>
 
-## 📎 Attachments
+## 📎 附件
 
-Files that ChatGPT generates for you (for example spreadsheets or documents produced by Code Interpreter, linked as `sandbox:/mnt/data/...` in the answer or recorded in the message metadata) and non-image files you uploaded are downloaded together with the conversation.
+ChatGPT 为你生成的文件（例如代码解释器生成的表格或文档，在回答中以 `sandbox:/mnt/data/...` 链接出现，或记录在消息元数据里）以及你上传的非图片文件，会随对话一起下载。
 
-- **Markdown / HTML**: when a conversation has attachments, the export becomes a `.zip` that contains the `.md`/`.html` file plus an `attachments/` folder. Links in the exported file point at the local copies; files that are not linked from the answer are listed under the message.
-- **Markdown**: images (generated, uploaded, or drawn by Code Interpreter) are saved as `attachments/image-1.png`, `image-2.png`, ... and linked from the Markdown instead of being embedded as base64. The HTML export keeps its images inline so the file stays self-contained.
-- **Export All (Markdown / HTML)**: attachments are stored in `attachments/<conversation file name>/` inside the batch zip.
-- **Share pages**: files generated by ChatGPT are fetched through the public share endpoint; uploads are skipped because they need the owner's session.
-- Generated files are fetched from the persisted copy ChatGPT keeps when one exists, and from the sandbox otherwise (waiting while the sandbox is still preparing the file, like ChatGPT does). Files that can no longer be fetched are reported after the export and their original links are kept.
+- **Markdown / HTML**：对话含有附件时，导出结果会变成一个 `.zip`，其中包含 `.md`/`.html` 文件和一个 `attachments/` 文件夹。导出文件中的链接指向本地副本；回答里没有链接到的文件会列在对应消息的下方。
+- **Markdown**：图片（生成的、上传的或代码解释器绘制的）保存为 `attachments/image-1.png`、`image-2.png`……并在 Markdown 中以相对路径引用，而不是内嵌 base64。HTML 导出仍然内嵌图片，保持单文件自包含。
+- **批量导出（Markdown / HTML）**：附件存放在批量 zip 内的 `attachments/<对话文件名>/` 目录下。
+- **分享页**：ChatGPT 生成的文件通过公开的分享接口获取；上传的文件需要文件所有者的登录状态，因此会跳过。
+- 生成的文件优先从 ChatGPT 保存的持久副本获取，没有时再从沙盒获取（沙盒还在准备文件时会像 ChatGPT 一样等待重试）。无法再获取的文件会在导出结束后提示，并保留原始链接。
 
-The feature can be turned off in **Setting → Export Attachments**.
+该功能可在 **设置 → 导出附件** 中关闭。
 
-## 📤 Export Multiple Conversations
+## 📤 批量导出对话
 
-When you click the "Export All" button, the **Export Conversations** dialog pops up. Here are the functions you can access.
+点击「批量导出」按钮会弹出 **导出对话** 对话框，可用功能如下。
 
-**Export from official export file (conversations.json)**
+**从官方导出文件（conversations.json）导出**
 
-Click the upload icon button to upload a JSON file of conversations, such as one downloaded from OpenAI.
+点击上传图标按钮，上传对话的 JSON 文件，例如从 OpenAI 下载的导出文件。
 
-**Export from API**
+**从 API 导出**
 
-In the list of all your conversations, select which conversations you want to export. Check the "Select All" checkbox to export all your conversations.
+在所有对话的列表中勾选要导出的对话。勾选「全选」可导出全部对话。
 
-Select your export format from the dropdown on the bottom left. You can choose from the following formats.
+在左下角的下拉框中选择导出格式，可选格式如下。
 
 - **Markdown**
 - **HTML**
 - **JSON**
 - **JSON (ZIP)**
 
-Click the button to perform the action you want.
+点击按钮执行相应操作。
 
-- **Archive** -  Archived chat sessions will disappear from the sidebar and can be managed in ChatGPT settings. See [#199](https://github.com/pionxzh/chatgpt-exporter/issues/199) for more details.
-- **Delete** - Deletes the selected conversations.
-- **Export** - Exports the selected conversations in the format chosen using the format selector.
+- **归档** - 归档后的对话会从侧边栏消失，可在 ChatGPT 设置中管理。详见 [#199](https://github.com/pionxzh/chatgpt-exporter/issues/199)。
+- **删除** - 删除选中的对话。
+- **导出** - 按格式选择器中选定的格式导出选中的对话。
 
-## 💬 Using DeepSeek too?
+## 💬 也在用 DeepSeek？
 
-Check out [**DeepSeek Exporter**](https://github.com/pionxzh/deepseek-exporter) — the sister project that brings the same one-click export to [DeepSeek](https://chat.deepseek.com/), including DeepThink reasoning and web-search sources.
+看看 [**DeepSeek Exporter**](https://github.com/pionxzh/deepseek-exporter)：姊妹项目，为 [DeepSeek](https://chat.deepseek.com/) 提供同样的一键导出，包括深度思考过程和联网搜索来源。
 
-## 🤝 Contribution
+## 🤝 参与贡献
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md)
+见 [CONTRIBUTING.md](./CONTRIBUTING.md)
 
-## ⭐ Star History
+## ⭐ Star 历史
 
 <div align="center">
 
