@@ -2,20 +2,22 @@
 
 <div align="center">
 
-## A GreasyFork script to export the chat history of [ChatGPT](https://chatgpt.com/)
+## A userscript to export the chat history of [ChatGPT](https://chatgpt.com/), attachments included
 
 [![license][license-image]][license-url]
 [![release][release-image]][release-url]
-[![GreasyFork][GreasyFork-image]][GreasyFork-url]
+[![upstream][upstream-image]][upstream-url]
 
-[license-image]: https://img.shields.io/github/license/pionxzh/chatgpt-exporter?color=red
-[license-url]: https://github.com/pionxzh/chatgpt-exporter/blob/master/LICENSE
-[release-image]: https://img.shields.io/github/v/release/pionxzh/chatgpt-exporter?color=blue
-[release-url]: https://github.com/pionxzh/chatgpt-exporter/releases/latest
-[GreasyFork-image]: https://img.shields.io/static/v1?label=%20&message=GreasyFork&style=flat-square&labelColor=7B0000&color=960000&logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABmJLR0QA/wD/AP+gvaeTAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAB3RJTUUH3ggEBCQHM3fXsAAAAVdJREFUOMudkz2qwkAUhc/goBaGJBgUtBCZyj0ILkpwAW7Bws4yO3AHLiCtEFD8KVREkoiFxZzX5A2KGfN4F04zMN+ce+5c4LMUgDmANYBnrnV+plBSi+FwyHq9TgA2LQpvCiEiABwMBtzv95RSfoNEHy8DYBzHrNVqVEr9BWKcqNFoxF6vx3a7zc1mYyC73a4MogBg7vs+z+czO50OW60Wt9stK5UKp9Mpj8cjq9WqDTBHnjAdxzGQZrPJw+HA31oulzbAWgLoA0CWZVBKIY5jzGYzdLtdE9DlcrFNrY98zobqOA6TJKHW2jg4nU5sNBpFDp6mhVe5rsvVasUwDHm9Xqm15u12o+/7Hy0gD8KatOd5vN/v1FozTVN6nkchxFuI6hsAAIMg4OPxMJCXdtTbR7JJCMEgCJhlGUlyPB4XfumozInrupxMJpRSRtZlKoNYl+m/6/wDuWAjtPfsQuwAAAAASUVORK5CYII=
-[GreasyFork-url]: https://greasyfork.org/scripts/456055-chatgpt-exporter
+[license-image]: https://img.shields.io/github/license/czf0613/chatgpt-exporter?color=red
+[license-url]: https://github.com/czf0613/chatgpt-exporter/blob/master/LICENSE
+[release-image]: https://img.shields.io/github/v/release/czf0613/chatgpt-exporter?color=blue
+[release-url]: https://github.com/czf0613/chatgpt-exporter/releases/latest
+[upstream-image]: https://img.shields.io/badge/fork%20of-pionxzh%2Fchatgpt--exporter-lightgrey
+[upstream-url]: https://github.com/pionxzh/chatgpt-exporter
 
 English &nbsp;&nbsp;|&nbsp;&nbsp; [Français](./README_FR.md) &nbsp;&nbsp;|&nbsp;&nbsp; [Indonesia](./README_ID.md) &nbsp;&nbsp;|&nbsp;&nbsp; [한국어](./README_KR.md) &nbsp;&nbsp;|&nbsp;&nbsp; [Türkçe](./README_TR.md)
+
+This is a fork of [pionxzh/chatgpt-exporter](https://github.com/pionxzh/chatgpt-exporter) that keeps up with upstream and adds **[attachment export](#-attachments)**: the files ChatGPT generates and the files you upload are downloaded and bundled with the Markdown/HTML export, and images are saved as files in the Markdown export. It is not published on GreasyFork; install it from GitHub below.
 
 ![image](https://github.com/pionxzh/chatgpt-exporter/assets/9910706/1c864670-7912-4484-b4be-bdf5dde51557)
 
@@ -33,24 +35,18 @@ English &nbsp;&nbsp;|&nbsp;&nbsp; [Français](./README_FR.md) &nbsp;&nbsp;|&nbsp
 
 ### UserScript
 
-| Greasyfork                                                                        | GitHub                                                                                       |
-| --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| [![Install][Install-1-image]][install-1-url] | [![Install][Install-2-image]][install-2-url] |
+[![Install][Install-image]][install-url]
 
-[Install-1-image]: https://img.shields.io/badge/-Install-blue
-[Install-1-url]: https://greasyfork.org/scripts/456055-chatgpt-exporter
-[Install-2-image]: https://img.shields.io/badge/-Install-blue
-[Install-2-url]: https://raw.githubusercontent.com/pionxzh/chatgpt-exporter/master/dist/chatgpt.user.js
+[Install-image]: https://img.shields.io/badge/-Install%20from%20GitHub-blue
+[Install-url]: https://raw.githubusercontent.com/czf0613/chatgpt-exporter/master/dist/chatgpt.user.js
+
+Tampermonkey checks the same URL for updates, so every release pushed to `master` reaches you automatically. The built script is also attached to each [release](https://github.com/czf0613/chatgpt-exporter/releases). The original script without attachment export is on [GreasyFork](https://greasyfork.org/scripts/456055-chatgpt-exporter).
 
 > Make sure that the [`Allow User Scripts` is enabled](https://www.tampermonkey.net/faq.php?q=Q209) in your browser settings for Tampermonkey.
 
-### This fork
-
-This fork ([czf0613/chatgpt-exporter](https://github.com/czf0613/chatgpt-exporter)) follows upstream and adds [attachment export](#-attachments): the files ChatGPT generates and the files you upload are downloaded and bundled with the Markdown/HTML export, and images are saved as files in the Markdown export. Install it from [`dist/chatgpt.user.js`](https://raw.githubusercontent.com/czf0613/chatgpt-exporter/master/dist/chatgpt.user.js); Tampermonkey updates it from the same URL. Releases are listed under [Releases](https://github.com/czf0613/chatgpt-exporter/releases).
-
 #
 
-[📚 Supported Formats](#-supported-formats) &nbsp;&nbsp;|&nbsp;&nbsp; [💡 Example](#-example) &nbsp;&nbsp;|&nbsp;&nbsp; [📤 Export Multiple Conversations](#-export-multiple-conversations) &nbsp;&nbsp;|&nbsp;&nbsp; [🤝 Contribution](#-contribution) &nbsp;&nbsp;|&nbsp;&nbsp; [⭐ Star History](#-star-history)
+[📚 Supported Formats](#-supported-formats) &nbsp;&nbsp;|&nbsp;&nbsp; [💡 Example](#-example) &nbsp;&nbsp;|&nbsp;&nbsp; [📎 Attachments](#-attachments) &nbsp;&nbsp;|&nbsp;&nbsp; [📤 Export Multiple Conversations](#-export-multiple-conversations) &nbsp;&nbsp;|&nbsp;&nbsp; [🤝 Contribution](#-contribution) &nbsp;&nbsp;|&nbsp;&nbsp; [⭐ Star History](#-star-history)
 
 </div>
 
@@ -274,6 +270,6 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md)
 
 <div align="center">
 
-<img src="https://star-history.dera.page/svg?repos=pionxzh/chatgpt-exporter&type=Date" width="600" height="400" alt="Star History Chart" valign="middle">
+<img src="https://star-history.dera.page/svg?repos=czf0613/chatgpt-exporter&type=Date" width="600" height="400" alt="Star History Chart" valign="middle">
 
 </div>
