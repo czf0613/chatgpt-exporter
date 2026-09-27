@@ -1,13 +1,15 @@
+import type { Emphasis, Strong } from 'mdast'
 import { fetchConversation, getCurrentChatId, processConversation, shouldSkipMessageInExport } from '../api'
 import i18n from '../i18n'
 import { checkIfConversationStarted } from '../page'
 import { checkIfTemporaryChatIsExportable } from '../temporaryChat'
 import { transformContentReferences } from '../utils/citations'
 import { copyToClipboard } from '../utils/clipboard'
+import { protectMath } from '../utils/latex'
 import { flatMap, fromMarkdown, toMarkdown } from '../utils/markdown'
 import { standardizeLineBreaks } from '../utils/text'
+import { transformAuthor } from '../utils/author'
 import type { ConversationNodeMessage } from '../api'
-import type { Emphasis, Strong } from 'mdast'
 
 export async function exportToText() {
     if (!checkIfConversationStarted()) {
@@ -23,7 +25,7 @@ export async function exportToText() {
     const chatId = await getCurrentChatId()
     // All image in text output will be replaced with `[image]`
     // So we don't need to waste time to download them
-    const rawConversation = await fetchConversation(chatId, false)
+    const rawConversation = await fetchConversation(chatId)
 
     const { conversationNodes } = processConversation(rawConversation)
     const text = conversationNodes
@@ -36,8 +38,6 @@ export async function exportToText() {
     return true
 }
 
-const LatexRegex = /(\s\$\$.+\$\$\s|\s\$.+\$\s|\\\[.+\\\]|\\\(.+\\\))|(^\$$[\S\s]+^\$$)|(^\$\$[\S\s]+^\$\$$)/gm
-
 function transformMessage(message?: ConversationNodeMessage) {
     if (!message || !message.content) return null
 
@@ -45,15 +45,6 @@ function transformMessage(message?: ConversationNodeMessage) {
 
     const author = transformAuthor(message.author)
     let content = transformContent(message.content, message.metadata)
-
-    const matches = content.match(LatexRegex)
-    if (matches) {
-        let index = 0
-        content = content.replace(LatexRegex, () => {
-            // Replace it with `╬${index}╬` to avoid markdown processor ruin the formula
-            return `╬${index++}╬`
-        })
-    }
 
     if (message.author.role === 'assistant') {
         content = transformContentReferences(content, message.metadata, {
@@ -66,14 +57,9 @@ function transformMessage(message?: ConversationNodeMessage) {
 
     // Only message from assistant will be reformatted
     if (message.author.role === 'assistant' && content) {
-        content = reformatContent(content)
-    }
-
-    if (matches) {
-        // Replace `╬${index}╬` back to the original latex
-        content = content.replace(/╬(\d+)╬/g, (_, index) => {
-            return matches[+index]
-        })
+        // Keep formulas out of the markdown round trip, as in the markdown export
+        const { text, restore } = protectMath(content)
+        content = restore(reformatContent(text))
     }
 
     return `${author}:\n${content}`
@@ -140,25 +126,7 @@ function reformatContent(input: string) {
 
         return [item]
     })
-    const result = toMarkdown(root)
-    // HACK: render to markdown will let [ be escaped, so we need to remove the first character
-    if (result.startsWith('\\[') && input.startsWith('[')) {
-        return result.slice(1)
-    }
-    return result
-}
-
-function transformAuthor(author: ConversationNodeMessage['author']): string {
-    switch (author.role) {
-        case 'assistant':
-            return 'ChatGPT'
-        case 'user':
-            return 'You'
-        case 'tool':
-            return `Plugin${author.name ? ` (${author.name})` : ''}`
-        default:
-            return author.role
-    }
+    return toMarkdown(root, input)
 }
 
 /**

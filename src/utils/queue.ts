@@ -8,6 +8,8 @@ type RequestFn<T> = () => Promise<T>
 interface RequestObject<T> {
     name: string
     request: RequestFn<T>
+    /** Skip the pause after a success, for requests served from a cache */
+    cached?: boolean
 }
 
 /** Internal shape with per-item retry counters */
@@ -50,6 +52,8 @@ export class RequestQueue<T> {
 
     private queue: Array<InternalRequestObject<T>> = []
     private results: T[] = []
+    /** Names of requests dropped after exhausting MAX_RETRIES in this run */
+    private skipped: string[] = []
 
     private status: 'IDLE' | 'IN_PROGRESS' | 'STOPPED' | 'COMPLETED' = 'IDLE'
 
@@ -109,12 +113,18 @@ export class RequestQueue<T> {
         this.runId++
         this.queue = []
         this.results = []
+        this.skipped = []
         this.status = 'IDLE'
         this.backoff = this.minBackoff
         this.pauseUntil = 0
         this.batchPauses = 0
         this.total = 0
         this.completed = 0
+    }
+
+    /** Names of the requests skipped so far in this run, in order */
+    getSkipped(): readonly string[] {
+        return this.skipped
     }
 
     on(event: 'progress', fn: (progress: ProgressEvent) => void): () => void
@@ -167,6 +177,7 @@ export class RequestQueue<T> {
             this.progress(name, 'processing')
             this.backoff = this.minBackoff // reset on success
             requestObject.retries = 0
+            if (requestObject.cached) waitMs = 0
         }
         catch (error) {
             if (runId !== this.runId) return
@@ -192,6 +203,7 @@ export class RequestQueue<T> {
                 requestObject.retries++
                 if (requestObject.retries > MAX_RETRIES) {
                     console.warn(`[Exporter] "${name}" skipped after ${MAX_RETRIES} retries`)
+                    this.skipped.push(name)
                     waitMs = 0 // skip — don't re-queue
                 }
                 else {

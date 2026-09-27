@@ -1,19 +1,21 @@
 import JSZip from 'jszip'
-import { fetchConversation, getCurrentChatId, processConversation, shouldSkipMessageInExport } from '../api'
+import { fetchConversation, getCurrentChatId, loadConversationAttachments, processConversation, shouldSkipMessageInExport, withImageAssets } from '../api'
 import { KEY_ATTACHMENTS_ENABLED, KEY_SOURCES_ENABLED, KEY_THINKING_ENABLED, KEY_TIMESTAMP_24H, KEY_TIMESTAMP_ENABLED, KEY_TIMESTAMP_MARKDOWN, baseUrl } from '../constants'
 import i18n from '../i18n'
 import { checkIfConversationStarted } from '../page'
 import { checkIfTemporaryChatIsExportable } from '../temporaryChat'
-import { SINGLE_EXPORT_ATTACHMENT_DIR, addAttachmentsToZip, attachmentDirForFile, attachmentHref, downloadFileWithAttachments, getMessageAttachments, reportFailedAttachments, rewriteAttachmentLinks } from '../utils/attachments'
+import { SINGLE_EXPORT_ATTACHMENT_DIR, addAttachmentsToZip, attachmentDirForFile, downloadFileWithAttachments, getMessageAttachmentEntries, reportFailedAttachments, rewriteAttachmentLinks } from '../utils/attachments'
 import { transformContentReferences } from '../utils/citations'
 import { buildZipFileName, downloadFile, getFileNameWithFormat } from '../utils/download'
+import { protectMath } from '../utils/latex'
 import { fromMarkdown, toMarkdown } from '../utils/markdown'
 import { ScriptStorage } from '../utils/storage'
 import { standardizeLineBreaks } from '../utils/text'
-import { dateStr, timestamp, unixTimestampToISOString } from '../utils/utils'
+import { transformAuthor } from '../utils/author'
 import type { ApiConversationWithId, Citation, ConversationAttachments, ConversationNodeMessage, ConversationResult, ThinkingContent } from '../api'
 import type { ExportMeta } from '../ui/SettingContext'
 import type { PartInfo } from '../utils/download'
+import { getMetaVariables, resolveMetaList } from './meta'
 
 export async function exportToMarkdown(fileNameFormat: string, metaList: ExportMeta[]) {
     if (!checkIfConversationStarted()) {
@@ -27,8 +29,9 @@ export async function exportToMarkdown(fileNameFormat: string, metaList: ExportM
     }
 
     const chatId = await getCurrentChatId()
+    const rawConversation = await withImageAssets(await fetchConversation(chatId))
     const enableAttachments = ScriptStorage.get<boolean>(KEY_ATTACHMENTS_ENABLED) ?? true
-    const rawConversation = await fetchConversation(chatId, true, enableAttachments)
+    if (enableAttachments) await loadConversationAttachments(rawConversation)
     const enableThinking = ScriptStorage.get<boolean>(KEY_THINKING_ENABLED) ?? false
     const conversation = processConversation(rawConversation, { enableThinking })
     const markdown = conversationToMarkdown(conversation, metaList, SINGLE_EXPORT_ATTACHMENT_DIR)
@@ -81,28 +84,12 @@ export async function exportAllToMarkdown(fileNameFormat: string, apiConversatio
     return true
 }
 
-const LatexRegex = /(\s\$\$.+\$\$\s|\s\$.+\$\s|\\\[.+\\\]|\\\(.+\\\))|(^\$$[\S\s]+^\$$)|(^\$\$[\S\s]+^\$\$$)/gm
-
 function conversationToMarkdown(conversation: ConversationResult, metaList?: ExportMeta[], attachmentDir = SINGLE_EXPORT_ATTACHMENT_DIR) {
-    const { id, title, model, modelSlug, createTime, updateTime, conversationNodes, attachments } = conversation
+    const { id, title, conversationNodes, attachments } = conversation
     const source = `${baseUrl}/c/${id}`
 
-    const _metaList = metaList
-        ?.filter(x => !!x.name)
-        .map(({ name, value }) => {
-            const val = value
-                .replace('{title}', title)
-                .replace('{date}', dateStr())
-                .replace('{timestamp}', timestamp())
-                .replace('{source}', source)
-                .replace('{model}', model)
-                .replace('{model_name}', modelSlug)
-                .replace('{create_time}', unixTimestampToISOString(createTime))
-                .replace('{update_time}', unixTimestampToISOString(updateTime))
-
-            return `${name}: ${val}`
-        })
-    ?? []
+    const _metaList = resolveMetaList(metaList, getMetaVariables(conversation, source))
+        .map(([name, val]) => `${name}: ${val}`)
     const frontMatter = _metaList.length > 0
         ? `---\n${_metaList.join('\n')}\n---\n\n`
         : ''
@@ -146,41 +133,16 @@ function conversationToMarkdown(conversation: ConversationResult, metaList?: Exp
         // Only message from assistant will be reformatted
         if (message.author.role === 'assistant') {
             postSteps.push((input) => {
-                // Replace mathematical formula annotation
-                input = input
-                    .replace(/^\\\[(.+)\\\]$/gm, '$$$$$1$$$$')
-                    .replace(/\\\[/g, '$')
-                    .replace(/\\\]/g, '$')
-                    .replace(/\\\(/g, '$')
-                    .replace(/\\\)/g, '$')
-                const matches = input.match(LatexRegex)
-                // Skip code block as the following steps can potentially break the code
-                const isCodeBlock = /```/.test(input)
-                if (!isCodeBlock && matches) {
-                    let index = 0
-                    input = input.replace(LatexRegex, () => {
-                        // Replace it with `╬${index}╬` to avoid markdown processor ruin the formula
-                        return `╬${index++}╬`
-                    })
-                }
-
-                let transformed = toMarkdown(fromMarkdown(input))
-
-                if (!isCodeBlock && matches) {
-                    // Replace `╬${index}╬` back to the original latex
-                    transformed = transformed.replace(/╬(\d+)╬/g, (_, index) => {
-                        return matches[+index]
-                    })
-                }
-
-                return transformed
+                // Keep formulas out of the markdown round trip, which would escape them
+                const { text, restore } = protectMath(input)
+                return restore(toMarkdown(fromMarkdown(text), text))
             })
         }
         const postProcess = (input: string) => postSteps.reduce((acc, fn) => fn(acc), input)
         const content = transformContent(message.content, message.metadata, postProcess)
-        const attachmentList = formatAttachmentsMarkdown(attachments, message.id, attachmentDir)
+        const attachmentsBlock = formatAttachmentsMarkdown(message, attachments, attachmentDir)
 
-        return `#### ${author}:\n${timestampHtml}${thinkingBlock}${content}${attachmentList}`
+        return `#### ${author}:\n${timestampHtml}${thinkingBlock}${content}${attachmentsBlock}`
     }).filter(Boolean).join('\n\n')
 
     const markdown = `${frontMatter}# ${title}\n\n${content}`
@@ -188,17 +150,20 @@ function conversationToMarkdown(conversation: ConversationResult, metaList?: Exp
     return markdown
 }
 
-function transformAuthor(author: ConversationNodeMessage['author']): string {
-    switch (author.role) {
-        case 'assistant':
-            return 'ChatGPT'
-        case 'user':
-            return 'You'
-        case 'tool':
-            return `Plugin${author.name ? ` (${author.name})` : ''}`
-        default:
-            return author.role
-    }
+/**
+ * List the files that belong to a message: uploads and generated files that
+ * the answer doesn't link. Downloaded copies are linked, the rest is named.
+ */
+function formatAttachmentsMarkdown(message: ConversationNodeMessage, attachments: ConversationAttachments | undefined, attachmentDir: string) {
+    const entries = getMessageAttachmentEntries(message, attachments, attachmentDir)
+    if (entries.length === 0) return ''
+
+    const lines = entries.map((entry) => {
+        if (entry.href) return `- 📎 [${entry.name.replace(/[[\]]/g, '\\$&')}](${entry.href})`
+        if (entry.unavailable) return `- 📎 ${entry.name} *(${i18n.t('Attachment unavailable')})*`
+        return `- 📎 ${entry.name}`
+    })
+    return `\n\n${lines.join('\n')}`
 }
 
 /**
@@ -245,7 +210,7 @@ function transformContent(
         case 'text':
             return postProcess(content.parts?.join('\n') || '')
         case 'code':
-            return `Code:\n\`\`\`\n${content.text}\n\`\`\`` || ''
+            return postProcess(`Code:\n\`\`\`\n${content.text}\n\`\`\``)
         case 'execution_output':
             if (metadata?.aggregate_result?.messages) {
                 return metadata.aggregate_result.messages
@@ -303,21 +268,4 @@ function formatThinkingMarkdown(thinking: ThinkingContent): string {
     if (!body) return ''
 
     return `<details>\n<summary>${durationLabel}</summary>\n\n${body}\n\n</details>\n\n`
-}
-
-/**
- * List the files the user uploaded with a message. Files generated by ChatGPT
- * are already linked from the answer text, so they are not repeated here.
- */
-function formatAttachmentsMarkdown(attachments: ConversationAttachments | undefined, messageId: string, attachmentDir: string) {
-    const { items, failed } = getMessageAttachments(attachments, messageId)
-    if (items.length === 0 && failed.length === 0) return ''
-
-    const escape = (name: string) => name.replace(/[[\]]/g, '\\$&')
-    const lines = [
-        ...items.map(item => `- [${escape(item.name)}](${attachmentHref(attachmentDir, item.name)})`),
-        ...failed.map(item => `- ${escape(item.name)} *(${i18n.t('Attachment unavailable')})*`),
-    ]
-
-    return `\n\n${i18n.t('Attachments')}:\n${lines.join('\n')}`
 }

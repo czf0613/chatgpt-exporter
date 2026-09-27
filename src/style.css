@@ -1,3 +1,12 @@
+.ce-timestamp {
+    display: block;
+    width: 100%;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    text-align: right;
+    color: var(--ce-text-tertiary);
+}
+
 span[data-time-format] {
     display: none;
 }
@@ -10,54 +19,32 @@ body[data-time-format="24"] span[data-time-format="24"] {
     display: inline;
 }
 
-.Select {
-    padding: 0 2rem 0 0.5rem;
-    width: auto;
-    min-width: 7.5rem;
-    border-radius: 4px;
-    box-shadow: 0 0 0 1px #6f6e77;
-}
-
-.dark .Select {
-    background-color: #2f2f2f;
-    color: #fff;
-    box-shadow: 0 0 0 1px #6f6e77;
-}
-
-html {
-    --ce-text-primary: var(--text-primary, #0d0d0d);
-    --ce-menu-primary: #ffffff;
-    --ce-menu-secondary: var(--sidebar-surface-secondary, #ececec);
-    --ce-border-light: #0d0d0d26;
-}
-
-.dark {
-    --ce-text-primary: var(--text-primary, #ececec);
-    --ce-menu-primary: #2A2A2A;
-    --ce-menu-secondary: var(--sidebar-surface-secondary, #212121);
-    --ce-border-light: var(--border-default, rgba(255, 255, 255, .15));
-}
-
-/* Define our own background in both themes — this used to lean on
-   ChatGPT's bg-menu utility class, which no longer paints one */
-.bg-menu {
-    background-color: var(--ce-menu-primary);
-}
-
-.dark .bg-menu {
-    background-color: var(--ce-menu-primary);
-}
-
-.border-menu {
-    border-color: var(--ce-border-light);
-}
-
-.menu-item {
+.ce-menu-item {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 12px;
     height: 46px;
+    border: 1px solid var(--ce-menu-border);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background-color 0.2s;
 }
 
-.menu-item[disabled] {
+.ce-menu-item[disabled] {
     filter: brightness(0.5);
+}
+
+.ce-menu-item:not([disabled]):hover {
+    background-color: var(--ce-hover);
+}
+
+.ce-menu-item-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
 }
 
 .ce-nav-trigger {
@@ -72,6 +59,12 @@ html {
     white-space: nowrap;
 }
 
+/* Same box as ChatGPT's sidebar rows, so the icon lines up with theirs. */
+.ce-nav-trigger-expanded {
+    margin: 0 0 8px;
+    padding-inline: 10px;
+}
+
 .ce-nav-trigger-collapsed {
     width: 32px;
     height: 32px;
@@ -80,118 +73,74 @@ html {
     justify-content: center;
     gap: 0;
     border-radius: 8px;
-    color: var(--text-secondary, var(--ce-text-primary));
-}
-
-.ce-nav-trigger-collapsed:hover {
-    background-color: var(--sidebar-surface-secondary, rgba(255, 255, 255, 0.1));
+    color: var(--ce-text-secondary);
 }
 
 .ce-nav-trigger-collapsed .ce-menu-item-text {
     display: none;
 }
 
+.ce-divider {
+    height: 1px;
+    background-color: var(--ce-border-light);
+}
+
 .ce-card {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 4px;
+    padding: 8px 4px;
+    color: var(--ce-text-primary);
+    background-color: var(--ce-menu-surface);
     border-radius: 1rem;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.08);
+    transition: opacity 0.2s;
+    animation: ce-fade-in 0.3s;
 }
 
-/* ChatGPT's main column carries its own z-index, which beats the menu's
-   portalled Radix popper wrapper (position: fixed, z-index: auto). Raise
-   only OUR wrapper — :has keeps ChatGPT's own Radix poppers untouched —
-   and stay below the dialogs at 1000/1001. */
-[data-radix-popper-content-wrapper]:has(.ce-card) {
-    z-index: 999 !important;
+.ce-card-mobile {
+    animation: ce-slide-up 0.3s;
 }
 
-.dark .ce-card {
+:is(.dark, [data-theme="dark"]) .ce-card {
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
-.inputFieldSet {
-    display: block;
-    border-width: 2px;
-    border-style: groove;
+.ce-card .ce-menu-item {
+    column-gap: 8px;
+    padding-inline-start: 8px;
 }
 
-.inputFieldSet legend {
-    margin-left: 4px;
+.ce-dialog .ce-menu-item {
+    padding-inline-start: 8px;
 }
 
-.inputFieldSet input {
-    background-color: transparent;
-    box-shadow: none!important;
+/* HoverCard sets left/top. ChatGPT's main column carries its own z-index,
+   so raise the card above it. Dialogs sit in the top layer, above this. */
+.ce-card {
+    position: fixed;
+    z-index: 999;
 }
 
-.row-half {
+.ce-card-arrow {
+    position: absolute;
+    left: -8px;
+    fill: var(--ce-menu-arrow);
+    stroke: var(--ce-menu-border);
+}
+
+.ce-row-half {
     grid-column: auto / span 1;
 }
 
-.row-full {
+.ce-row-full {
     grid-column: auto / span 2;
 }
 
-.dropdown-backdrop {
+.ce-backdrop {
     display: block;
     position: fixed;
-    top: 0;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    background-color: rgba(0,0,0,.5);
-    animation-name: pointerFadeIn;
-    animation-duration: .3s;
-}
-
-@keyframes fadeIn {
-    from {
-        opacity: 0;
-    }
-    to {
-        opacity: 1;
-    }
-}
-
-@keyframes slideUp {
-    from {
-        transform: translateY(100%);
-    }
-    to {
-        transform: translateY(0);
-    }
-}
-
-@keyframes pointerFadeIn {
-    from {
-        opacity: 0;
-        pointer-events: none;
-    }
-    to {
-        opacity: 1;
-        pointer-events: auto;
-    }
-}
-
-@keyframes rotate {
-    from {
-        transform: rotate(0deg);
-    }
-    to {
-        transform: rotate(360deg);
-    }
-}
-
-@keyframes circularDash {
-    0% {
-        stroke-dasharray: 1px, 200px;
-        stroke-dashoffset: 0;
-    }
-    50% {
-        stroke-dasharray: 100px, 200px;
-        stroke-dashoffset: -15px;
-    }
-    100% {
-        stroke-dasharray: 100px, 200px;
-        stroke-dashoffset: -125px;
-    }
+    inset: 0;
+    background-color: rgba(0, 0, 0, 0.5);
+    animation: ce-pointer-fade-in 0.3s;
 }

@@ -1,65 +1,13 @@
 import JSZip from 'jszip'
-import sanitize from 'sanitize-filename'
 import i18n from '../i18n'
-import { downloadFile } from './download'
 import type { ConversationAttachments, ConversationNodeMessage } from '../api'
+import { SANDBOX_LINK_REGEX, sandboxPathFromLink } from './attachmentPaths'
+import { downloadFile } from './download'
+
+export * from './attachmentPaths'
 
 /** Folder inside the zip that holds the attachments of a single exported conversation */
 export const SINGLE_EXPORT_ATTACHMENT_DIR = 'attachments'
-
-/**
- * Files generated inside the Code Interpreter sandbox are linked from the
- * message text as `[Download](sandbox:/mnt/data/report.xlsx)`.
- */
-const SANDBOX_LINK_REGEX = /sandbox:\/[^\s)"'<>\]]+/g
-
-export function extractSandboxLinks(text: string): string[] {
-    return Array.from(new Set(text.match(SANDBOX_LINK_REGEX) ?? []))
-}
-
-export function getMessageTextParts(content: ConversationNodeMessage['content']): string[] {
-    if (content.content_type !== 'text' && content.content_type !== 'multimodal_text') return []
-    const parts: unknown[] = content.parts ?? []
-    return parts.filter((part): part is string => typeof part === 'string')
-}
-
-function safeDecode(value: string) {
-    try {
-        return decodeURIComponent(value)
-    }
-    catch {
-        return value
-    }
-}
-
-/** `sandbox:/mnt/data/My%20Report.xlsx` → `/mnt/data/My Report.xlsx` */
-export function sandboxPathFromLink(link: string) {
-    return safeDecode(link.replace(/^sandbox:/, ''))
-}
-
-/** `sandbox:/mnt/data/My%20Report.xlsx` → `My Report.xlsx` */
-export function sandboxPathToFileName(link: string) {
-    const path = sandboxPathFromLink(link)
-    return path.split('/').pop() || path
-}
-
-export function toSafeFileName(name: string, fallback = 'attachment') {
-    return sanitize(name).trim() || fallback
-}
-
-/** Returns `name`, or `name (n)` when that name is already taken (case-insensitive) */
-export function uniqueFileName(name: string, used: Set<string>) {
-    const dot = name.lastIndexOf('.')
-    const stem = dot > 0 ? name.slice(0, dot) : name
-    const ext = dot > 0 ? name.slice(dot) : ''
-
-    let candidate = name
-    for (let i = 1; used.has(candidate.toLowerCase()); i++) {
-        candidate = `${stem} (${i})${ext}`
-    }
-    used.add(candidate.toLowerCase())
-    return candidate
-}
 
 /** Relative, URL-encoded path used in links: `attachments/My%20Report.xlsx` */
 export function attachmentHref(dir: string, name: string) {
@@ -71,30 +19,66 @@ export function attachmentDirForFile(fileName: string) {
     return `${SINGLE_EXPORT_ATTACHMENT_DIR}/${fileName.replace(/\.[^./]+$/, '')}`
 }
 
-/** Point `sandbox:/mnt/data/...` links at the downloaded copies */
+/**
+ * Point `sandbox:/mnt/data/...` links at the downloaded copies. Links are
+ * matched by decoded path, so `My%20Report.xlsx` and `My Report.xlsx` are the same file.
+ */
 export function rewriteAttachmentLinks(input: string, attachments: ConversationAttachments | undefined, dir: string) {
     const hrefs = new Map<string, string>()
     for (const item of attachments?.items ?? []) {
-        if (item.source === 'sandbox') hrefs.set(item.key, attachmentHref(dir, item.name))
+        if (item.sandboxPath) hrefs.set(item.sandboxPath, attachmentHref(dir, item.name))
     }
     if (hrefs.size === 0) return input
 
-    return input.replace(SANDBOX_LINK_REGEX, link => hrefs.get(link) ?? link)
+    return input.replace(SANDBOX_LINK_REGEX, link => hrefs.get(sandboxPathFromLink(link)) ?? link)
 }
 
-/** Uploaded files that belong to a message, used to render an attachment list under it */
-export function getMessageAttachments(attachments: ConversationAttachments | undefined, messageId: string) {
-    return {
-        items: attachments?.items.filter(item => item.source === 'upload' && item.messageId === messageId) ?? [],
-        failed: attachments?.failed.filter(item => item.source === 'upload' && item.messageId === messageId) ?? [],
+export interface MessageAttachmentEntry {
+    /** Display name: the original file name */
+    name: string
+    /** Relative link to the downloaded copy, absent when the file was not downloaded */
+    href?: string
+    /** True when a download was attempted and failed */
+    unavailable?: boolean
+}
+
+/**
+ * Files to list under a message: the files the user uploaded with it (their
+ * content lives in hidden tool messages) and generated files that ChatGPT
+ * recorded in the metadata without linking them from the answer. Files that
+ * the answer links are left out, their links get rewritten instead.
+ */
+export function getMessageAttachmentEntries(message: ConversationNodeMessage, attachments: ConversationAttachments | undefined, dir: string): MessageAttachmentEntry[] {
+    const entries: MessageAttachmentEntry[] = []
+    const items = attachments?.items.filter(item => item.messageId === message.id) ?? []
+    const failed = attachments?.failed.filter(item => item.messageId === message.id) ?? []
+
+    for (const upload of message.metadata?.attachments ?? []) {
+        if (!upload?.name || upload.mime_type?.startsWith('image/')) continue
+        const item = items.find(item => item.source === 'upload' && item.key === upload.id)
+        if (item) {
+            entries.push({ name: upload.name, href: attachmentHref(dir, item.name) })
+            continue
+        }
+        const unavailable = failed.some(item => item.source === 'upload' && item.key === upload.id)
+        entries.push({ name: upload.name, unavailable })
     }
+
+    for (const item of items) {
+        if (item.source === 'sandbox' && !item.linked) entries.push({ name: item.name, href: attachmentHref(dir, item.name) })
+    }
+    for (const item of failed) {
+        if (item.source === 'sandbox' && !item.linked) entries.push({ name: item.name, unavailable: true })
+    }
+
+    return entries
 }
 
 export function addAttachmentsToZip(zip: JSZip, dir: string, attachments: ConversationAttachments | undefined) {
     for (const item of attachments?.items ?? []) {
         // Most attachments are already compressed (xlsx, docx, pdf, png, ...),
         // deflating them again is slow and gains nothing.
-        zip.file(`${dir}/${item.name}`, item.blob, { compression: 'STORE' })
+        zip.file(`${dir}/${item.name}`, item.blob.arrayBuffer(), { compression: 'STORE' })
     }
 }
 

@@ -1,6 +1,6 @@
 import { shouldSkipMessageInExport } from '../api'
-import { jsonlStringify, nonNullable } from './utils'
 import type { ConversationNode, ConversationResult } from '../api'
+import { jsonlStringify, nonNullable } from './utils'
 
 interface NameMessage {
     user_name: string
@@ -79,9 +79,9 @@ export function convertToOoba(conversation: ConversationResult): string {
         }
 
         const role = message.message.author.role
-        const text = message.message.content.parts[0]
+        const text = message.message.content.parts.join('\n')
         const nextRole = nextMessage.message.author.role
-        const nextText = nextMessage.message.content.parts[0]
+        const nextText = nextMessage.message.content.parts.join('\n')
 
         if (role === 'system') {
             if (text !== '') {

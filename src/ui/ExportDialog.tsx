@@ -1,26 +1,50 @@
-import * as Dialog from '@radix-ui/react-dialog'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
-import { useTranslation } from 'react-i18next'
-import { archiveConversation, deleteConversation, fetchAllConversations, fetchConversation, fetchConversationsPage, fetchProjects, probeApi } from '../api'
+import type { ChangeEvent } from 'preact/compat'
+import i18n, { useTranslation } from '../i18n'
+import { RateLimitError, archiveConversation, deleteConversation, fetchAllConversations, fetchConversation, fetchConversationsPage, fetchProjects, loadConversationAttachments, probeApi, withImageAssets } from '../api'
 import { EXPORT_OPERATION_BATCH, KEY_EXPORTED_UPDATE_TIMES } from '../constants'
 import { exportAllToHtml } from '../exporter/html'
 import { exportAllToJson, exportAllToOfficialJson } from '../exporter/json'
 import { exportAllToMarkdown } from '../exporter/markdown'
+import { applyHead, refreshConversationList } from '../utils/conversationList'
 import { RequestQueue } from '../utils/queue'
 import { ScriptStorage } from '../utils/storage'
 import { sleep } from '../utils/utils'
-import { CheckBox } from './CheckBox'
-import { IconCross, IconLoading, IconUpload } from './Icons'
-import { useSettingContext } from './SettingContext'
 import type { ApiConversationItem, ApiConversationWithId, ApiProjectInfo } from '../api'
 import type { FC } from '../type'
-import type { ChangeEvent } from 'preact/compat'
+import { CheckBox } from './CheckBox'
+import { Dialog } from './Dialog'
+import { IconCross, IconLoading, IconUpload } from './Icons'
+import { useSettingContext } from './SettingContext'
 
 /**
  * Module-level flag shared between ExportDialog (parent) and DialogContent (child).
  * Lets the parent gate ESC / outside-click dismissal without lifting state.
  */
 const exportingRef = { current: false }
+
+/**
+ * Raw conversations fetched by batch exports, kept for the page lifetime so
+ * exporting the same selection again (e.g. in another format) skips the API.
+ * An entry is reused only while the list's `update_time` still matches.
+ */
+const conversationCache = new Map<string, { updateTime: ApiConversationItem['update_time'], conversation: ApiConversationWithId }>()
+
+/**
+ * The main conversation list from the last load, shown right away when the
+ * dialog reopens and then refreshed from the head. Project lists are not
+ * cached: they page by cursor, so the head refresh does not apply as is.
+ */
+let listCache: { limit: number, items: ApiConversationItem[], hasMore: boolean, total: number | null } | null = null
+
+function dropFromListCache(removed: ApiConversationItem[]) {
+    if (!listCache) return
+    const ids = new Set(removed.map(c => c.id))
+    listCache = { ...listCache, items: listCache.items.filter(c => !ids.has(c.id)) }
+}
+
+/** Cap on how many skipped titles the end-of-export alert lists */
+const MAX_SKIPPED_SHOWN = 20
 
 // ---------------------------------------------------------------------------
 // Utilities
@@ -65,7 +89,7 @@ function getExportedUpdateTimes(): Record<string, number> {
 }
 
 /** Persist the last-exported update_time for conversations that were actually exported successfully. */
-function markExported(conversations: { id: string; update_time?: number | string }[]): void {
+function markExported(conversations: { id: string, update_time?: number | string }[]): void {
     if (conversations.length === 0) return
     const map = getExportedUpdateTimes()
     for (const c of conversations) {
@@ -95,6 +119,17 @@ function textSearch(title: string, query: string): boolean {
     }
 }
 
+/** Name a wait only when the server sent `Retry-After`, not our own fallback. */
+function describeListLoadError(error: unknown): string {
+    if (error instanceof RateLimitError) {
+        return error.retryAfterFromServer
+            ? i18n.t('List Rate Limited Wait', { n: Math.ceil(error.retryAfterMs / 1000) })
+            : i18n.t('List Rate Limited')
+    }
+    if (error instanceof Error && error.message) return error.message
+    return i18n.t('List Load Failed')
+}
+
 // ---------------------------------------------------------------------------
 // ProjectSelect component
 // ---------------------------------------------------------------------------
@@ -111,13 +146,13 @@ const ProjectSelect: FC<ProjectSelectProps> = ({ projects, selected, setSelected
     const { t } = useTranslation()
 
     return (
-        <div className="ProjectSelect flex items-center text-gray-600 dark:text-gray-300 justify-between mb-3">
+        <div className="ce-project-select">
             {t('Select Project')}
-            <div className="flex items-center gap-2">
-                {loading && <IconLoading className="w-3 h-3" />}
+            <div className="ce-hstack">
+                {loading && <IconLoading className="ce-icon-sm" />}
                 <select
                     disabled={disabled}
-                    className="Select"
+                    className="ce-select"
                     value={selected ?? ''}
                     onChange={(e) => {
                         const val = e.currentTarget.value
@@ -199,7 +234,7 @@ const ConversationSelect: FC<ConversationSelectProps> = ({
             {/* ── Search input ── */}
             <input
                 type="search"
-                className="SelectSearch"
+                className="ce-select-search"
                 placeholder={t('Search')}
                 value={query}
                 disabled={disabled}
@@ -211,7 +246,7 @@ const ConversationSelect: FC<ConversationSelectProps> = ({
             />
 
             {/* ── Toolbar: select-all + status select + hint + counter ── */}
-            <div className="SelectToolbar">
+            <div className="ce-select-toolbar">
                 <CheckBox
                     label={t('Select All')}
                     disabled={disabled}
@@ -221,22 +256,21 @@ const ConversationSelect: FC<ConversationSelectProps> = ({
                         setSelected(checked ? filtered : [])
                     }}
                 />
-                {/* min-w-0 lets the shrinkable items (hint first, then the loading
-                    indicator) truncate instead of the whole row wrapping */}
-                <div className="flex items-center gap-2 ml-auto min-w-0">
+                {/* min-width: 0 lets the shrinkable items (hint first, then the
+                    loading indicator) truncate instead of the whole row wrapping */}
+                <div className="ce-select-toolbar-end">
                     {loading && conversations.length > 0 && (
-                        <span className="flex items-center gap-1 truncate min-w-0 text-sm text-gray-500 dark:text-gray-400">
-                            <IconLoading className="w-3 h-3" />
+                        <span className="ce-toolbar-loading">
+                            <IconLoading className="ce-icon-sm" />
                             {t('Loading')}... ({conversations.length})
                         </span>
                     )}
                     <select
-                        className="Select shrink-0"
                         // Fixed width: only the placeholder is ever shown collapsed, and
                         // without it the control sizes itself to the longest option,
                         // which overflows the toolbar in verbose locales. The 2rem right
                         // padding keeps the placeholder off the dropdown chevron.
-                        style={{ fontSize: '0.75rem', padding: '2px 2rem 2px 0.5rem', width: '8.5rem', textOverflow: 'ellipsis' }}
+                        className="ce-select ce-toolbar-status"
                         disabled={disabled || filtered.length === 0}
                         value=""
                         title="Select conversations by export status"
@@ -250,21 +284,19 @@ const ConversationSelect: FC<ConversationSelectProps> = ({
                         <option value="not_exported">{t('Select Not Exported')}</option>
                         <option value="updated">{t('Select Updated')}</option>
                     </select>
-                    {/* Highest shrink factor: the hint collapses before the
-                        loading indicator starts truncating */}
-                    <span className="truncate min-w-0 text-xs text-gray-400 dark:text-gray-500" style={{ flexShrink: 99 }}>
+                    <span className="ce-toolbar-hint">
                         {t('Shift Select Hint')}
                     </span>
-                    <span className="whitespace-nowrap shrink-0 text-sm font-medium tabular-nums text-gray-500 dark:text-gray-400">
+                    <span className="ce-toolbar-count">
                         {selected.length} / {filtered.length}
                     </span>
                 </div>
             </div>
 
             {/* ── Column headers with sort controls ── */}
-            <div className="SelectListHeader">
+            <div className="ce-list-header">
                 <button
-                    className={`SelectListHeaderCell SelectListHeaderCellTitle${sortField === 'title' ? ' SelectListHeaderCellActive' : ''}`}
+                    className={`ce-list-header-cell ce-list-header-cell-title${sortField === 'title' ? ' ce-list-header-cell-active' : ''}`}
                     onClick={() => {
                         if (sortField === 'title') {
                             setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -278,7 +310,7 @@ const ConversationSelect: FC<ConversationSelectProps> = ({
                     Title {sortField === 'title' ? (sortDir === 'asc' ? '↑' : '↓') : '↕'}
                 </button>
                 <button
-                    className={`SelectListHeaderCell${sortField === 'create_time' ? ' SelectListHeaderCellActive' : ''}`}
+                    className={`ce-list-header-cell${sortField === 'create_time' ? ' ce-list-header-cell-active' : ''}`}
                     onClick={() => {
                         if (sortField === 'create_time') {
                             setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -292,7 +324,7 @@ const ConversationSelect: FC<ConversationSelectProps> = ({
                     Created {sortField === 'create_time' ? (sortDir === 'asc' ? '↑' : '↓') : '↕'}
                 </button>
                 <button
-                    className={`SelectListHeaderCell${sortField === 'update_time' ? ' SelectListHeaderCellActive' : ''}`}
+                    className={`ce-list-header-cell${sortField === 'update_time' ? ' ce-list-header-cell-active' : ''}`}
                     onClick={() => {
                         if (sortField === 'update_time') {
                             setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -308,14 +340,14 @@ const ConversationSelect: FC<ConversationSelectProps> = ({
             </div>
 
             {/* ── Conversation list ── */}
-            <ul className="SelectList">
-                {loading && conversations.length === 0 && <li className="SelectItem">{t('Loading')}...</li>}
-                {error && <li className="SelectItem">{t('Error')}: {error}</li>}
+            <ul className="ce-select-list">
+                {loading && conversations.length === 0 && <li className="ce-select-item">{t('Loading')}...</li>}
+                {error && <li className="ce-select-item">{t('Error')}: {error}</li>}
                 {filtered.map((c, index) => {
                     const isSelected = selected.some(x => x.id === c.id)
                     return (
                         <li
-                            className="SelectItem"
+                            className="ce-select-item"
                             key={c.id}
                             onClickCapture={(e: MouseEvent) => {
                                 if (disabled) return
@@ -342,15 +374,15 @@ const ConversationSelect: FC<ConversationSelectProps> = ({
                                     setSelected(checked ? [...selected, c] : selected.filter(x => x.id !== c.id))
                                 }}
                             />
-                            {c.is_starred && <span title="Starred" style={{ color: '#f59e0b', flexShrink: 0 }}>★</span>}
+                            {c.is_starred && <span className="ce-starred" title="Starred">★</span>}
                             <span
-                                className={`SelectItemMeta${sortField === 'create_time' ? ' SelectItemMetaActive' : ''}`}
+                                className={`ce-select-item-meta${sortField === 'create_time' ? ' ce-select-item-meta-active' : ''}`}
                                 title={`Created: ${c.create_time ?? '—'}`}
                             >
                                 {formatConvDate(c.create_time)}
                             </span>
                             <span
-                                className={`SelectItemMeta${sortField === 'update_time' ? ' SelectItemMetaActive' : ''}`}
+                                className={`ce-select-item-meta${sortField === 'update_time' ? ' ce-select-item-meta-active' : ''}`}
                                 title={`Updated: ${c.update_time ?? '—'}`}
                             >
                                 {formatConvDate(c.update_time)}
@@ -359,7 +391,7 @@ const ConversationSelect: FC<ConversationSelectProps> = ({
                     )
                 })}
                 {!loading && !error && filtered.length === 0 && conversations.length > 0 && (
-                    <li className="SelectItem text-gray-400 dark:text-gray-500">{t('No results')}</li>
+                    <li className="ce-select-item ce-select-item-empty">{t('No results')}</li>
                 )}
             </ul>
         </>
@@ -374,9 +406,10 @@ type ExportSource = 'API' | 'Local'
 
 interface DialogContentProps {
     format: string
+    onClose: () => void
 }
 
-const DialogContent: FC<DialogContentProps> = ({ format }) => {
+const DialogContent: FC<DialogContentProps> = ({ format, onClose }) => {
     const { t } = useTranslation()
     const { enableMeta, exportMetaList, exportAllLimit, enableAttachments } = useSettingContext()
     const metaList = useMemo(() => enableMeta ? exportMetaList : [], [enableMeta, exportMetaList])
@@ -405,7 +438,8 @@ const DialogContent: FC<DialogContentProps> = ({ format }) => {
 
     const [selected, setSelected] = useState<ApiConversationItem[]>([])
     const [exportType, setExportType] = useState(exportAllOptions[0].label)
-    const disabled = processing || !!error || selected.length === 0
+    // A list error leaves the loaded part exportable.
+    const disabled = processing || selected.length === 0
 
     // "Load more" state
     const [hasMore, setHasMore] = useState(false)
@@ -431,6 +465,8 @@ const DialogContent: FC<DialogContentProps> = ({ format }) => {
     const totalBatchesRef = useRef(0)
     /** Set to true when the user clicks Cancel — prevents the 'done' handler from starting the next batch */
     const cancelledRef = useRef(false)
+    /** Conversations the queue gave up on, accumulated across every batch of the current export */
+    const skippedRef = useRef<string[]>([])
     /** Incremented on each new fetch; callbacks check this to discard stale results after remount */
     const fetchGenRef = useRef(0)
 
@@ -455,8 +491,25 @@ const DialogContent: FC<DialogContentProps> = ({ format }) => {
         requestQueue.clear()
         // Only the Markdown and HTML exporters embed attachments; the JSON exporters keep the raw API response
         const fetchAttachments = enableAttachments && (exportType === 'Markdown' || exportType === 'HTML')
-        chunk.forEach(({ id, title }) => {
-            requestQueue.add({ name: title, request: () => fetchConversation(id, exportType !== 'JSON', fetchAttachments) })
+        chunk.forEach(({ id, title, update_time }) => {
+            const entry = conversationCache.get(id)
+            const cached = entry && entry.updateTime === update_time ? entry.conversation : undefined
+            requestQueue.add({
+                name: title,
+                cached: !!cached,
+                request: async () => {
+                    let conversation = cached
+                    if (!conversation) {
+                        conversation = await fetchConversation(id)
+                        conversationCache.set(id, { updateTime: update_time, conversation })
+                    }
+                    if (exportType === 'JSON') return conversation
+                    // The copy is not cached, so the attachments attached to it are downloaded per export
+                    const exportable = await withImageAssets(conversation)
+                    if (fetchAttachments) await loadConversationAttachments(exportable)
+                    return exportable
+                },
+            })
         })
         requestQueue.start()
     }, [requestQueue, exportType, enableAttachments])
@@ -512,6 +565,7 @@ const DialogContent: FC<DialogContentProps> = ({ format }) => {
                 // Only conversations that were actually exported successfully get recorded
                 markExported(results)
             }
+            skippedRef.current.push(...requestQueue.getSkipped())
             if (partIndex < totalBatches) {
                 await sleep(400)
                 batchIndexRef.current++
@@ -520,15 +574,22 @@ const DialogContent: FC<DialogContentProps> = ({ format }) => {
             }
             else {
                 setProcessing(false)
+                const skipped = skippedRef.current
+                if (skipped.length > 0) {
+                    const shown = skipped.slice(0, MAX_SKIPPED_SHOWN).map(name => `- ${name}`)
+                    if (skipped.length > MAX_SKIPPED_SHOWN) shown.push('- …')
+                    alert(`${t('Export Skipped Message', { n: skipped.length })}\n\n${shown.join('\n')}`)
+                }
             }
         })
         return () => off()
-    }, [requestQueue, exportAllOptions, exportType, format, metaList, startApiBatch, selectedProject])
+    }, [requestQueue, exportAllOptions, exportType, format, metaList, startApiBatch, selectedProject, t])
 
     useEffect(() => {
         const off = archiveQueue.on('done', () => {
             setProcessing(false)
             setApiConversations(prev => prev.filter(c => !selected.some(s => s.id === c.id)))
+            dropFromListCache(selected)
             setSelected([])
             alert(t('Conversation Archived Message'))
         })
@@ -539,6 +600,7 @@ const DialogContent: FC<DialogContentProps> = ({ format }) => {
         const off = deleteQueue.on('done', () => {
             setProcessing(false)
             setApiConversations(prev => prev.filter(c => !selected.some(s => s.id === c.id)))
+            dropFromListCache(selected)
             setSelected([])
             alert(t('Conversation Deleted Message'))
         })
@@ -555,6 +617,7 @@ const DialogContent: FC<DialogContentProps> = ({ format }) => {
     const exportAllFromApi = useCallback(() => {
         if (disabled) return
         cancelledRef.current = false
+        skippedRef.current = []
         const chunks = chunkArray(selected, EXPORT_OPERATION_BATCH)
         pendingBatchesRef.current = chunks
         batchIndexRef.current = 0
@@ -642,20 +705,71 @@ const DialogContent: FC<DialogContentProps> = ({ format }) => {
         const gen = ++fetchGenRef.current
         const alive = () => gen === fetchGenRef.current
         setSelected([])
+
+        const cache = selectedProjectId === null && listCache?.limit === exportAllLimit ? listCache : null
+        if (cache) {
+            setApiConversations(cache.items)
+            setHasMore(cache.hasMore)
+            setTotalAvailable(cache.total)
+            setError('')
+            setLoading(false)
+            refreshConversationList(
+                cache.items,
+                (offset, limit) => fetchConversationsPage(null, offset, limit),
+                EXPORT_OPERATION_BATCH,
+                exportAllLimit,
+            )
+                .then(({ head, total }) => {
+                    // Merge onto the latest cache: "Load more" may have appended while this ran
+                    if (listCache) {
+                        listCache = {
+                            ...listCache,
+                            items: applyHead(head, listCache.items),
+                            total: listCache.total !== null ? total : null,
+                        }
+                    }
+                    if (!alive() || !listCache) return
+                    setApiConversations(prev => applyHead(head, prev))
+                    setTotalAvailable(listCache.total)
+                    // Selections made before the refresh landed must carry the new update_time
+                    const byId = new Map(head.map(c => [c.id, c]))
+                    setSelected(prev => prev.map(c => byId.get(c.id) ?? c))
+                })
+                .catch(err => console.error('Error refreshing conversations:', err))
+            return
+        }
+
         setApiConversations([])
         setHasMore(false)
         setTotalAvailable(null)
+        setError('')
         setLoading(true)
+        let loadedHasMore = false
+        let loadFailed = false
         fetchAllConversations(
             selectedProjectId,
             exportAllLimit,
             (batch) => { if (alive()) setApiConversations(prev => [...prev, ...batch]) },
-            (hasMore) => { if (alive()) setHasMore(hasMore) },
+            (hasMore) => {
+                loadedHasMore = hasMore
+                if (alive()) setHasMore(hasMore)
+            },
+            // The promise still resolves with the partial list, so report the error here.
+            (error) => {
+                loadFailed = true
+                if (alive()) setError(describeListLoadError(error))
+            },
         )
+            .then((items) => {
+                // A list cut short by an error would hide its tail until reload
+                if (selectedProjectId === null && items.length > 0 && !loadFailed) {
+                    listCache = { limit: exportAllLimit, items, hasMore: loadedHasMore, total: null }
+                }
+            })
             .catch((err: Error) => {
                 if (!alive()) return
                 console.error('Error fetching conversations:', err)
-                setError(err.message || 'Failed to load conversations')
+                setError(describeListLoadError(err))
             })
             .finally(() => { if (alive()) setLoading(false) })
     }, [exportAllLimit, selectedProjectId])
@@ -667,10 +781,17 @@ const DialogContent: FC<DialogContentProps> = ({ format }) => {
             const page = await fetchConversationsPage(selectedProjectId, apiConversations.length, EXPORT_OPERATION_BATCH)
             setApiConversations(prev => [...prev, ...page.items])
             if (page.total !== null) setTotalAvailable(page.total)
-            setHasMore(
-                page.items.length >= EXPORT_OPERATION_BATCH
-                && (page.total === null || apiConversations.length + page.items.length < page.total),
-            )
+            const more = page.items.length >= EXPORT_OPERATION_BATCH
+                && (page.total === null || apiConversations.length + page.items.length < page.total)
+            setHasMore(more)
+            if (selectedProjectId === null && listCache) {
+                listCache = {
+                    ...listCache,
+                    items: [...listCache.items, ...page.items],
+                    hasMore: more,
+                    total: page.total ?? listCache.total,
+                }
+            }
         }
         catch (err) {
             console.error('loadMore error', err)
@@ -718,13 +839,12 @@ const DialogContent: FC<DialogContentProps> = ({ format }) => {
 
     return (
         <>
-            <Dialog.Title className="DialogTitle">{t('Export Dialog Title')}</Dialog.Title>
-            <div className="flex items-center text-gray-600 dark:text-gray-300 flex justify-between border-b-[1px] pb-3 mb-3 dark:border-gray-700">
+            <div className="ce-export-source">
                 {t('Export from official export file')} (conversations.json)&nbsp;
-                <div className="flex items-center gap-2">
+                <div className="ce-hstack">
                     {exportSource === 'API' && (
                         <button
-                            className="Button neutral"
+                            className="ce-button ce-button-neutral"
                             style={{ fontSize: '0.72rem', padding: '2px 8px', whiteSpace: 'nowrap' }}
                             disabled={probeStatus === 'testing' || processing}
                             title={Object.keys(probeHeaders).length > 0
@@ -736,8 +856,8 @@ const DialogContent: FC<DialogContentProps> = ({ format }) => {
                         </button>
                     )}
                     {exportSource === 'API' && (
-                        <button className="btn relative btn-neutral" onClick={() => fileInputRef.current?.click()}>
-                            <IconUpload className="w-4 h-4" />
+                        <button className="ce-icon-button" aria-label="Upload" onClick={() => fileInputRef.current?.click()}>
+                            <IconUpload className="ce-icon" />
                         </button>
                     )}
                 </div>
@@ -745,7 +865,7 @@ const DialogContent: FC<DialogContentProps> = ({ format }) => {
             <input
                 type="file"
                 accept="application/json"
-                className="hidden"
+                hidden
                 ref={fileInputRef}
                 onChange={onUpload}
             />
@@ -769,9 +889,9 @@ const DialogContent: FC<DialogContentProps> = ({ format }) => {
 
             {/* Load-more button */}
             {exportSource === 'API' && !loading && !processing && hasMore && (
-                <div className="flex items-center justify-center mt-2 mb-1 gap-2">
+                <div className="ce-load-more">
                     <button
-                        className="Button neutral"
+                        className="ce-button ce-button-neutral"
                         style={{ fontSize: '0.8rem', padding: '4px 14px' }}
                         disabled={loadingMore}
                         onClick={loadMore}
@@ -783,16 +903,16 @@ const DialogContent: FC<DialogContentProps> = ({ format }) => {
                                 : t('Load more conversations', { n: EXPORT_OPERATION_BATCH })}
                     </button>
                     {totalAvailable !== null && !loadingMore && (
-                        <span className="text-xs text-gray-400 dark:text-gray-500 tabular-nums">
+                        <span className="ce-muted-count">
                             {apiConversations.length} / {totalAvailable}
                         </span>
                     )}
                 </div>
             )}
 
-            <div className="ActionBar flex flex-wrap mt-3 items-center gap-2">
+            <div className="ce-action-bar">
                 <select
-                    className="Select shrink-0"
+                    className="ce-select"
                     disabled={processing}
                     value={exportType}
                     onChange={e => setExportType(e.currentTarget.value)}
@@ -801,37 +921,37 @@ const DialogContent: FC<DialogContentProps> = ({ format }) => {
                         <option key={t(label)} value={label}>{label}</option>
                     ))}
                 </select>
-                <div className="flex flex-grow"></div>
-                <button className="Button red" disabled={disabled || exportSource === 'Local'} onClick={archiveAll}>
+                <div className="ce-spacer"></div>
+                <button className="ce-button ce-button-red" disabled={disabled || exportSource === 'Local'} onClick={archiveAll}>
                     {t('Archive')}
                 </button>
-                <button className="Button red" disabled={disabled || exportSource === 'Local'} onClick={deleteAll}>
+                <button className="ce-button ce-button-red" disabled={disabled || exportSource === 'Local'} onClick={deleteAll}>
                     {t('Delete')}
                 </button>
-                <button className="Button green" disabled={disabled} onClick={exportAll}>
+                <button className="ce-button ce-button-green" disabled={disabled} onClick={exportAll}>
                     {t('Export')}
                 </button>
             </div>
             {totalBatches > 1 && !processing && (
-                <p className="mt-1.5 text-xs text-right text-gray-400 dark:text-gray-500">
+                <p className="ce-batch-note">
                     {`${totalBatches} downloads \u00B7 100 conversations each`}
                 </p>
             )}
             {processing && (
                 <>
-                    <div className="mt-2 mb-1 justify-between flex items-center gap-2">
-                        <span className="truncate text-sm text-gray-600 dark:text-gray-300">
+                    <div className="ce-progress-header">
+                        <span className="ce-progress-name">
                             {progress.currentStatus === 'rate_limited'
                                 ? `⏳ Rate limited — waiting ${progress.rateLimitWaitSecs ?? '…'}s`
                                 : progress.currentName}
                         </span>
-                        <span className="shrink-0 tabular-nums text-sm text-gray-500 dark:text-gray-400">
+                        <span className="ce-progress-count">
                             {progress.totalBatches > 1
                                 ? `${t('Batch progress').replace('{{current}}', String(progress.batchIndex + 1)).replace('{{total}}', String(progress.totalBatches))} \u00B7 ${progress.completed}/${progress.total}`
                                 : `${progress.completed}/${progress.total}`}
                         </span>
                         <button
-                            className="Button red"
+                            className="ce-button ce-button-red"
                             style={{ fontSize: '0.75rem', padding: '3px 10px', height: 'auto' }}
                             title="Stop the export — any batches already downloaded are kept"
                             onClick={cancelExport}
@@ -839,9 +959,9 @@ const DialogContent: FC<DialogContentProps> = ({ format }) => {
                             {t('Cancel')}
                         </button>
                     </div>
-                    <div className="w-full bg-gray-200 rounded-full h-2.5 mb-4 dark:bg-gray-700">
+                    <div className="ce-progress">
                         <div
-                            className={`h-2.5 rounded-full ${progress.currentStatus === 'rate_limited' ? 'bg-amber-500' : 'bg-blue-600'}`}
+                            className={`ce-progress-bar${progress.currentStatus === 'rate_limited' ? ' ce-progress-bar-waiting' : ''}`}
                             style={{ width: `${progress.total > 0 ? (progress.completed / progress.total) * 100 : 0}%` }}
                         />
                     </div>
@@ -849,21 +969,19 @@ const DialogContent: FC<DialogContentProps> = ({ format }) => {
             )}
             {processing
                 ? (
-                    <button
-                        className="IconButton CloseButton"
-                        aria-label="Export in progress"
-                        title="Click Cancel to stop the export"
-                        style={{ cursor: 'not-allowed', opacity: 0.25 }}
-                    >
-                        <IconCross />
-                    </button>
-                    )
-                : (
-                    <Dialog.Close asChild>
-                        <button className="IconButton CloseButton" aria-label="Close">
+                        <button
+                            className="ce-icon-button ce-close-button"
+                            aria-label="Export in progress"
+                            title="Click Cancel to stop the export"
+                            style={{ cursor: 'not-allowed', opacity: 0.25 }}
+                        >
                             <IconCross />
                         </button>
-                    </Dialog.Close>
+                    )
+                : (
+                        <button className="ce-icon-button ce-close-button" aria-label="Close" onClick={onClose}>
+                            <IconCross />
+                        </button>
                     )}
         </>
     )
@@ -879,32 +997,21 @@ interface ExportDialogProps {
     onOpenChange: (value: boolean) => void
 }
 
-export const ExportDialog: FC<ExportDialogProps> = ({ format, open, onOpenChange, children }) => {
-    const guardClose = (e: Event) => {
-        if (exportingRef.current) e.preventDefault()
+export function ExportDialog({ format, open, onOpenChange }: ExportDialogProps) {
+    const { t } = useTranslation()
+    const onChange = (value: boolean) => {
+        if (!value && exportingRef.current) return // block close while exporting
+        onOpenChange(value)
     }
 
     return (
-        <Dialog.Root
+        <Dialog
             open={open}
-            onOpenChange={(val: boolean) => {
-                if (!val && exportingRef.current) return // block close while exporting
-                onOpenChange(val)
-            }}
+            onOpenChange={onChange}
+            title={t('Export Dialog Title')}
+            className="ce-dialog-plain"
         >
-            <Dialog.Trigger asChild>
-                {children}
-            </Dialog.Trigger>
-            <Dialog.Portal>
-                <Dialog.Overlay className="DialogOverlay" />
-                <Dialog.Content
-                    className="DialogContent _export"
-                    onEscapeKeyDown={guardClose}
-                    onInteractOutside={guardClose}
-                >
-                    {open && <DialogContent format={format} />}
-                </Dialog.Content>
-            </Dialog.Portal>
-        </Dialog.Root>
+            <DialogContent format={format} onClose={() => onChange(false)} />
+        </Dialog>
     )
 }
