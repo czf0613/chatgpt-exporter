@@ -135,7 +135,7 @@ function conversationToHtml(conversation: ConversationResult, avatar: string, me
             postSteps = [input => `<p class="no-katex">${escapeHtml(input)}</p>`]
         }
         const postProcess = (input: string) => postSteps.reduce((acc, fn) => fn(acc), input)
-        const content = transformContent(message.content, message.metadata, postProcess)
+        const content = rewriteAttachmentLinks(transformContent(message.content, message.metadata, postProcess), attachments, attachmentDir)
         const attachmentEntries = getMessageAttachmentEntries(message, attachments, attachmentDir)
         const attachmentsHtml = attachmentEntries.length
             ? `<ul class="attachments">${attachmentEntries.map(entry => `<li>📎 ${formatAttachmentEntryHtml(entry)}</li>`).join('')}</ul>`

@@ -1,7 +1,7 @@
 import JSZip from 'jszip'
 import i18n from '../i18n'
 import type { ConversationAttachments, ConversationNodeMessage } from '../api'
-import { SANDBOX_LINK_REGEX, sandboxPathFromLink } from './attachmentPaths'
+import { ATTACHMENT_PLACEHOLDER_REGEX, SANDBOX_LINK_REGEX, attachmentNameFromPlaceholder, sandboxPathFromLink } from './attachmentPaths'
 import { downloadFile } from './download'
 
 export * from './attachmentPaths'
@@ -25,12 +25,16 @@ export function attachmentDirForFile(fileName: string) {
  */
 export function rewriteAttachmentLinks(input: string, attachments: ConversationAttachments | undefined, dir: string) {
     const hrefs = new Map<string, string>()
+    const placeholders = new Map<string, string>()
     for (const item of attachments?.items ?? []) {
         if (item.sandboxPath) hrefs.set(item.sandboxPath, attachmentHref(dir, item.name))
+        if (item.source === 'image') placeholders.set(item.name, attachmentHref(dir, item.name))
     }
-    if (hrefs.size === 0) return input
+    if (hrefs.size === 0 && placeholders.size === 0) return input
 
-    return input.replace(SANDBOX_LINK_REGEX, link => hrefs.get(sandboxPathFromLink(link)) ?? link)
+    return input
+        .replace(SANDBOX_LINK_REGEX, link => hrefs.get(sandboxPathFromLink(link)) ?? link)
+        .replace(ATTACHMENT_PLACEHOLDER_REGEX, placeholder => placeholders.get(attachmentNameFromPlaceholder(placeholder)) ?? placeholder)
 }
 
 export interface MessageAttachmentEntry {

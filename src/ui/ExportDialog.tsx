@@ -506,7 +506,7 @@ const DialogContent: FC<DialogContentProps> = ({ format, onClose }) => {
                     if (exportType === 'JSON') return conversation
                     // The copy is not cached, so the attachments attached to it are downloaded per export
                     const exportable = await withImageAssets(conversation)
-                    if (fetchAttachments) await loadConversationAttachments(exportable)
+                    if (fetchAttachments) await loadConversationAttachments(exportable, { images: exportType === 'Markdown' })
                     return exportable
                 },
             })

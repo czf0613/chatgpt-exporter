@@ -31,7 +31,7 @@ export async function exportToMarkdown(fileNameFormat: string, metaList: ExportM
     const chatId = await getCurrentChatId()
     const rawConversation = await withImageAssets(await fetchConversation(chatId))
     const enableAttachments = ScriptStorage.get<boolean>(KEY_ATTACHMENTS_ENABLED) ?? true
-    if (enableAttachments) await loadConversationAttachments(rawConversation)
+    if (enableAttachments) await loadConversationAttachments(rawConversation, { images: true })
     const enableThinking = ScriptStorage.get<boolean>(KEY_THINKING_ENABLED) ?? false
     const conversation = processConversation(rawConversation, { enableThinking })
     const markdown = conversationToMarkdown(conversation, metaList, SINGLE_EXPORT_ATTACHMENT_DIR)
@@ -139,7 +139,8 @@ function conversationToMarkdown(conversation: ConversationResult, metaList?: Exp
             })
         }
         const postProcess = (input: string) => postSteps.reduce((acc, fn) => fn(acc), input)
-        const content = transformContent(message.content, message.metadata, postProcess)
+        // Image parts bypass the post steps, so their placeholders are rewritten on the rendered content
+        const content = rewriteAttachmentLinks(transformContent(message.content, message.metadata, postProcess), attachments, attachmentDir)
         const attachmentsBlock = formatAttachmentsMarkdown(message, attachments, attachmentDir)
 
         return `#### ${author}:\n${timestampHtml}${thinkingBlock}${content}${attachmentsBlock}`

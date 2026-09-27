@@ -30,7 +30,7 @@ vi.mock('../src/utils/download', async importOriginal => ({
     downloadFile,
 }))
 
-const { loadConversationAttachments, processConversation } = await import('../src/api')
+const { loadConversationAttachments, processConversation, shouldSkipMessageInExport } = await import('../src/api')
 const { exportAllToHtml } = await import('../src/exporter/html')
 const { exportAllToMarkdown } = await import('../src/exporter/markdown')
 
@@ -60,6 +60,7 @@ interface RecordedRequest { url: string, headers: Record<string, string> }
 function mockFetch() {
     const requests: RecordedRequest[] = []
     const interpreterCalls = new Map<string, number>()
+    const inFlight = { current: 0, max: 0 }
     const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
     const success = (name: string) => ({ status: 'success', download_url: `https://dl.example/${encodeURIComponent(name)}`, metadata: { file_id: 'x' }, file_name: name, file_size_bytes: 1, mimedata: null, mime_type: null, creation_time: null })
 
@@ -75,6 +76,11 @@ function mockFetch() {
             const path = url.searchParams.get('sandbox_path') ?? ''
             const count = (interpreterCalls.get(path) ?? 0) + 1
             interpreterCalls.set(path, count)
+            // The sandbox endpoint is slow, so the exporter is expected to overlap these calls
+            inFlight.current++
+            inFlight.max = Math.max(inFlight.max, inFlight.current)
+            await new Promise(resolve => setTimeout(resolve, 20))
+            inFlight.current--
             if (path === '/mnt/data/extra.csv') return count === 1 ? json({ status: 'retry' }) : json(success('extra.csv'))
             if (path === '/mnt/data/chart.png') return json(success('chart.png'))
             if (path === '/mnt/data/expired.txt') return json({ status: 'error', error_code: 'file_not_found', error_message: 'File not found' })
@@ -87,7 +93,7 @@ function mockFetch() {
         throw new Error(`unexpected fetch ${url.href}`)
     })
 
-    return { requests, interpreterCalls }
+    return { requests, interpreterCalls, inFlight }
 }
 
 async function zippedFiles(exportAll: typeof exportAllToHtml, conv: ApiConversationWithId) {
@@ -105,10 +111,11 @@ async function zippedFiles(exportAll: typeof exportAllToHtml, conv: ApiConversat
 describe('conversation attachments', () => {
     it('downloads generated and uploaded files the way ChatGPT resolves them', async () => {
         vi.spyOn(console, 'warn').mockImplementation(() => {})
-        const { requests, interpreterCalls } = mockFetch()
+        const { requests, interpreterCalls, inFlight } = mockFetch()
         const conversation = testConversation()
 
         const attachments = await loadConversationAttachments(conversation)
+        expect(inFlight.max).toBeGreaterThan(1)
 
         expect(attachments.items.map(item => `${item.name}|${item.source}|${item.linked}|${item.messageId}`).sort()).toEqual([
             'My Report.xlsx|sandbox|true|a1',
@@ -185,5 +192,55 @@ describe('conversation attachments', () => {
         expect(shareRequests.every(request => !request.headers.Authorization)).toBe(true)
         expect(shareRequests.map(request => request.url)).toContain(`${API}/share/share1/file_from_message/a1?file_path=%2Fmnt%2Fdata%2FMy+Report.xlsx`)
         expect(requests.some(request => request.url.includes('/files/download/'))).toBe(false)
+    })
+
+    it('moves inline images into the attachments folder for markdown exports', async () => {
+        vi.spyOn(console, 'warn').mockImplementation(() => {})
+        mockFetch()
+        const png = `data:image/png;base64,${btoa('PNG-BYTES')}`
+        const jpeg = `data:image/jpeg;base64,${btoa('JPEG-BYTES')}`
+        const withImages = () => {
+            const conv = testConversation()
+            const mapping = conv.mapping as Record<string, any>
+            // an image generation result, its hidden copy kept for the image editor, and a code interpreter chart
+            mapping.i1 = { id: 'i1', parent: 'a2', children: ['h1'], message: { id: 'i1', author: { role: 'tool', name: 't2uay3k.sj1i4kz' }, recipient: 'all', create_time: 4, content: { content_type: 'multimodal_text', parts: [{ content_type: 'image_asset_pointer', asset_pointer: png, size_bytes: 9, width: 1, height: 1 }] }, metadata: {} } }
+            mapping.h1 = { id: 'h1', parent: 'i1', children: ['e1'], message: { id: 'h1', author: { role: 'tool', name: 't2uay3k.sj1i4kz' }, recipient: 'all', create_time: 5, content: { content_type: 'multimodal_text', parts: [{ content_type: 'image_asset_pointer', asset_pointer: png, size_bytes: 9, width: 1, height: 1 }] }, metadata: { is_visually_hidden_from_conversation: true } } }
+            mapping.e1 = { id: 'e1', parent: 'h1', children: [], message: { id: 'e1', author: { role: 'tool', name: 'python' }, recipient: 'all', create_time: 6, content: { content_type: 'execution_output', text: '' }, metadata: { aggregate_result: { messages: [{ message_type: 'image', image_url: jpeg, width: 1, height: 1 }] } } } }
+            mapping.a2.children = ['i1']
+            conv.current_node = 'e1'
+            return conv
+        }
+
+        const conversation = withImages()
+        const attachments = await loadConversationAttachments(conversation, { images: true })
+        expect(attachments.items.filter(item => item.source === 'image').map(item => item.name)).toEqual(['image-1.png', 'image-2.jpg'])
+        expect(await attachments.items.find(item => item.name === 'image-1.png')?.blob.text()).toBe('PNG-BYTES')
+
+        const files = await zippedFiles(exportAllToMarkdown, conversation)
+        expect(files['attachments/Files/image-1.png']).toBe('PNG-BYTES')
+        expect(files['attachments/Files/image-2.jpg']).toBe('JPEG-BYTES')
+        expect(files['Files.md']).toContain('![image](attachments/Files/image-1.png)')
+        expect(files['Files.md']).toContain('![image](attachments/Files/image-2.jpg)')
+        expect(files['Files.md']).not.toContain('data:image')
+        // Inline images are not listed under the message again
+        expect(files['Files.md']).not.toContain('📎 image-1.png')
+
+        // The html export keeps its images inline and stays self-contained
+        const htmlConversation = withImages()
+        await loadConversationAttachments(htmlConversation)
+        const htmlFiles = await zippedFiles(exportAllToHtml, htmlConversation)
+        expect(htmlFiles['Files.html']).toContain(`<img src="${png}"`)
+        expect(Object.keys(htmlFiles).some(name => name.includes('image-1'))).toBe(false)
+    })
+
+    it('skips the parsed content of an uploaded file that ChatGPT stuffs into the context', () => {
+        const message = {
+            id: 'ctx',
+            author: { role: 'tool', name: 'api_tool' },
+            recipient: 'all',
+            content: { content_type: 'multimodal_text', parts: ['[L1] <PARSED TEXT FOR PAGE: 1 / 9>', { content_type: 'image_asset_pointer', asset_pointer: 'sediment://c6704ff95173393#file_00000000934c8207b3db7b51a7cc2ca2#p_0.29d74c1fd6.jpg' }] },
+            metadata: { command: 'context_stuff', is_visually_hidden_from_conversation: false },
+        }
+        expect(shouldSkipMessageInExport(message as any)).toBe(true)
     })
 })
